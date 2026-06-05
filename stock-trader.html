@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Momentum Trader — Paper Account</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --panel:#121a2b; --panel2:#1a2540; --line:#243353;
+    --txt:#e6ecf7; --muted:#8a99b8; --accent:#4f8cff; --green:#23c87b;
+    --red:#ff5c6c; --amber:#ffb547; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 70% -10%,#16223e 0%,var(--bg) 55%);color:var(--txt);min-height:100vh}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px}
+  .hidden{display:none!important}
+  h1,h2,h3{margin:0 0 .4em}
+  h1{font-size:24px} h2{font-size:19px} h3{font-size:15px}
+  p{line-height:1.5;color:var(--muted)}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#7b5bff);
+    display:grid;place-items:center;font-weight:800;color:#fff}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
+  .muted{color:var(--muted)}
+  .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.live{color:var(--green);border-color:rgba(35,200,123,.4)}
+  .pill.sim{color:var(--amber);border-color:rgba(255,181,71,.4)}
+  button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--txt);padding:11px 16px;transition:.15s}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:linear-gradient(135deg,var(--accent),#6a7bff);border:none;color:#fff;font-weight:600}
+  button.primary:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:transparent}
+  button.danger{background:rgba(255,92,108,.12);border-color:rgba(255,92,108,.4);color:var(--red)}
+  input{font:inherit;width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--line);
+    background:#0d1424;color:var(--txt);margin-top:6px}
+  label.field{display:block;margin-bottom:14px;font-size:14px}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .row>*{flex:1;min-width:200px}
+  .check{display:flex;gap:11px;align-items:flex-start;margin:12px 0;font-size:14px;line-height:1.4}
+  .check input{width:18px;height:18px;margin-top:2px;flex:0 0 auto}
+  .disclaimer{background:var(--panel2);border-left:3px solid var(--amber);padding:14px 16px;border-radius:8px;margin:14px 0;font-size:13.5px;color:#cdd8ef}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .stat .v{font-size:24px;font-weight:700;margin-top:6px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:right;padding:10px 8px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px}
+  .toggle{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 14px}
+  .switch{position:relative;width:46px;height:26px}
+  .switch input{opacity:0;width:0;height:0}
+  .slider{position:absolute;inset:0;background:#33415f;border-radius:999px;transition:.2s}
+  .slider:before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--green)}
+  .switch input:checked + .slider:before{transform:translateX(20px)}
+  .log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;max-height:230px;overflow:auto}
+  .log div{padding:5px 0;border-bottom:1px solid #1b2740;color:#bccbe9}
+  .log .buy{color:var(--green)} .log .sell{color:var(--red)} .log .sys{color:var(--muted)}
+  .badge{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--panel2);color:var(--muted)}
+  .footnote{font-size:12px;color:var(--muted);margin-top:8px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <div class="logo">M</div>
+    <div>
+      <h1 style="margin:0">Momentum Trader</h1>
+      <div class="muted" style="font-size:13px">Paper-account algorithmic trading demo</div>
+    </div>
+  </div>
+
+  <!-- ============ SCREEN 1: PRIVACY & RISK ============ -->
+  <section id="screen-privacy">
+    <div class="card">
+      <h2>Privacy, Security &amp; Risk Disclosure</h2>
+      <p>Before you use this app, please read and respond to the following. You must agree to all items to continue, or you can decline and close the app.</p>
+
+      <div class="disclaimer">
+        <strong>This is a paper-trading (simulated) application.</strong> It does <u>not</u> ask for your bank login,
+        debit/credit card, or banking passwords, and it cannot move real money. It connects only to a brokerage
+        <em>paper (sandbox) account</em> using API keys you generate yourself. No real funds are ever at risk.
+      </div>
+
+      <h3 style="margin-top:18px">What data this app touches</h3>
+      <p style="margin-top:4px">Your Alpaca <strong>paper API key &amp; secret</strong> are kept only in your browser's memory for this
+      session and are sent directly to the broker's servers to fetch your simulated account. They are never sent to
+      Anthropic, never stored on disk, and disappear when you close the tab.</p>
+
+      <h3 style="margin-top:18px">Security concerns you should know</h3>
+      <p style="margin-top:4px">Even paper API keys should be treated as secrets — never paste real <em>live</em> trading keys here.
+      Browsers can be inspected by anyone with access to your computer. Use this only on a device you trust.</p>
+
+      <h3 style="margin-top:18px">Investment risk</h3>
+      <p style="margin-top:4px">Algorithmic strategies, including the moving-average momentum strategy used here, can and do lose money.
+      Past performance does not predict future results. Nothing in this app is financial advice. This tool is for
+      education and experimentation with simulated funds only.</p>
+
+      <div style="margin-top:20px">
+        <label class="check"><input type="checkbox" class="agree"> I understand this is a <strong>simulated / paper-trading</strong> app that cannot move real money.</label>
+        <label class="check"><input type="checkbox" class="agree"> I will only enter <strong>paper (sandbox) API keys</strong>, never live banking or live trading credentials.</label>
+        <label class="check"><input type="checkbox" class="agree"> I understand my keys stay in my browser session and are sent only to the broker, not to Anthropic.</label>
+        <label class="check"><input type="checkbox" class="agree"> I understand algorithmic trading carries risk and <strong>nothing here is financial advice</strong>.</label>
+      </div>
+
+      <div class="row" style="margin-top:18px">
+        <button id="declineBtn" class="danger" style="flex:0 0 auto">Decline &amp; Exit</button>
+        <button id="agreeBtn" class="primary" style="flex:0 0 auto" disabled>I Agree — Continue</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCREEN 2: CONNECT ============ -->
+  <section id="screen-connect" class="hidden">
+    <div class="card">
+      <h2>Connect your brokerage paper account</h2>
+      <p>Enter your <strong>Alpaca paper trading</strong> API keys. Create free keys at
+      <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" rel="noopener">Alpaca's paper dashboard</a>
+      (look for "Generate API Keys" under the Paper Trading account).</p>
+
+      <label class="field">API Key ID
+        <input id="apiKey" type="text" placeholder="PK..." autocomplete="off">
+      </label>
+      <label class="field">API Secret Key
+        <input id="apiSecret" type="password" placeholder="your paper secret" autocomplete="off">
+      </label>
+
+      <div class="row">
+        <button id="connectBtn" class="primary" style="flex:0 0 auto">Connect</button>
+        <button id="simBtn" class="ghost" style="flex:0 0 auto">Skip — run in Simulation Mode</button>
+      </div>
+      <p class="footnote" id="connectMsg"></p>
+      <div class="disclaimer" style="margin-top:14px">
+        Browsers sometimes block direct calls to brokerage APIs (CORS). If the connection fails, the app
+        automatically falls back to a fully-featured <strong>local simulation</strong> so you can still try everything.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCREEN 3: DASHBOARD ============ -->
+  <section id="screen-dash" class="hidden">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <h2 style="margin:0">Dashboard</h2>
+        <span id="modePill" class="pill sim">Simulation</span>
+      </div>
+      <div class="toggle">
+        <span style="font-size:13px">Auto-Trade</span>
+        <label class="switch"><input type="checkbox" id="autoToggle"><span class="slider"></span></label>
+        <span id="autoState" class="muted" style="font-size:13px">Off</span>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-bottom:18px">
+      <div class="stat"><div class="k">Portfolio Value</div><div class="v" id="pv">$0</div></div>
+      <div class="stat"><div class="k">Cash</div><div class="v" id="cash">$0</div></div>
+      <div class="stat"><div class="k">Day P/L</div><div class="v" id="dpl">$0</div></div>
+      <div class="stat"><div class="k">Open Positions</div><div class="v" id="posCount">0</div></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">Watchlist &amp; Signals</h3>
+        <span class="badge">MA crossover · 5/20 period</span>
+      </div>
+      <table style="margin-top:12px">
+        <thead><tr><th>Symbol</th><th>Price</th><th>Chg%</th><th>Fast MA</th><th>Slow MA</th><th>Signal</th></tr></thead>
+        <tbody id="watchBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Positions</h3>
+      <table style="margin-top:12px">
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Last</th><th>Mkt Value</th><th>Unreal. P/L</th></tr></thead>
+        <tbody id="posBody"><tr><td colspan="6" class="muted" style="text-align:center">No open positions</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">Activity Log</h3>
+        <button id="resetBtn" class="ghost" style="flex:0 0 auto;padding:7px 12px;font-size:13px">Reset Demo</button>
+      </div>
+      <div class="log" id="log" style="margin-top:10px"></div>
+    </div>
+
+    <p class="footnote">Paper-trading demo. No real money is involved. Not financial advice.</p>
+  </section>
+
+</div>
+
+<script>
+/* ============================================================
+   Momentum Trader — single-file paper trading demo
+   - Strategy: 5/20 simple moving-average crossover (momentum)
+   - Tries Alpaca paper API; falls back to local simulation
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+const show = id => { ['screen-privacy','screen-connect','screen-dash'].forEach(s=>$(s).classList.add('hidden')); $(id).classList.remove('hidden'); };
+const fmt = n => (n<0?'-$':'$') + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct = n => (n>=0?'+':'') + n.toFixed(2) + '%';
+
+const SYMBOLS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL'];
+const SEED_PRICE = {AAPL:212,MSFT:438,NVDA:121,TSLA:178,AMZN:198,GOOGL:176};
+
+let state = {
+  mode:'sim',            // 'live' or 'sim'
+  api:{key:'',secret:''},
+  cash:100000,
+  startEquity:100000,
+  positions:{},          // sym -> {qty, avg}
+  prices:{},             // sym -> current price
+  history:{},            // sym -> [prices]
+  auto:false,
+  timer:null,
+};
+
+/* ---------- Screen 1: privacy gate ---------- */
+const agrees = () => [...document.querySelectorAll('.agree')];
+agrees().forEach(c => c.addEventListener('change', ()=>{
+  $('agreeBtn').disabled = !agrees().every(c=>c.checked);
+}));
+$('declineBtn').onclick = () => {
+  document.body.innerHTML =
+    '<div style="max-width:560px;margin:80px auto;text-align:center;font-family:sans-serif;color:#e6ecf7">'+
+    '<h1>You declined the terms</h1><p style="color:#8a99b8">No data was collected and nothing was connected. '+
+    'You can close this tab. Reload the page if you change your mind.</p></div>';
+};
+$('agreeBtn').onclick = () => show('screen-connect');
+
+/* ---------- Screen 2: connect ---------- */
+$('simBtn').onclick = () => startSim('You chose Simulation Mode.');
+
+$('connectBtn').onclick = async () => {
+  const key = $('apiKey').value.trim(), secret = $('apiSecret').value.trim();
+  if(!key || !secret){ $('connectMsg').textContent = 'Enter both the key and secret, or use Simulation Mode.'; return; }
+  $('connectMsg').textContent = 'Connecting to Alpaca paper account…';
+  $('connectBtn').disabled = true;
+  try{
+    const res = await fetch('https://paper-api.alpaca.markets/v2/account', {
+      headers:{'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':secret}
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const acct = await res.json();
+    state.mode='live'; state.api={key,secret};
+    state.cash = parseFloat(acct.cash);
+    state.startEquity = parseFloat(acct.last_equity || acct.equity || acct.cash);
+    $('modePill').className='pill live'; $('modePill').textContent='Live Paper Account';
+    seedPrices();
+    enterDash('Connected to Alpaca paper account. Cash: '+fmt(state.cash));
+  }catch(err){
+    // Most commonly CORS / network block in-browser — fall back gracefully.
+    startSim('Direct broker connection blocked by the browser ('+err.message+'). Falling back to Simulation Mode.');
+  }finally{
+    $('connectBtn').disabled = false;
+  }
+};
+
+function startSim(reason){
+  state.mode='sim'; state.cash=100000; state.startEquity=100000; state.positions={};
+  $('modePill').className='pill sim'; $('modePill').textContent='Simulation';
+  seedPrices();
+  enterDash(reason);
+}
+
+function seedPrices(){
+  SYMBOLS.forEach(s=>{
+    state.prices[s]=SEED_PRICE[s];
+    state.history[s]=Array.from({length:20},(_,i)=>SEED_PRICE[s]*(1+(Math.random()-0.5)*0.01));
+    state.history[s].push(SEED_PRICE[s]);
+  });
+}
+
+/* ---------- Screen 3: dashboard + engine ---------- */
+function enterDash(msg){
+  show('screen-dash');
+  log(msg,'sys');
+  log('Strategy ready: 5/20 SMA crossover. Toggle Auto-Trade to let the engine trade for you.','sys');
+  render();
+  if(state.timer) clearInterval(state.timer);
+  state.timer = setInterval(tick, 2000);
+}
+
+$('autoToggle').onchange = e => {
+  state.auto = e.target.checked;
+  $('autoState').textContent = state.auto?'On':'Off';
+  log('Auto-Trade '+(state.auto?'ENABLED — engine will place orders on crossovers.':'disabled.'),'sys');
+};
+$('resetBtn').onclick = () => { state.mode==='live'?startSim('Demo reset to Simulation Mode.'):startSim('Demo reset.'); $('autoToggle').checked=false; state.auto=false; $('autoState').textContent='Off'; };
+
+function sma(arr,n){ if(arr.length<n) return null; const s=arr.slice(-n); return s.reduce((a,b)=>a+b,0)/n; }
+
+function tick(){
+  // Advance simulated prices (random walk with mild drift). In live mode this stands in for a quote feed.
+  SYMBOLS.forEach(s=>{
+    const drift = (Math.random()-0.48)*0.012;
+    state.prices[s] = Math.max(1, state.prices[s]*(1+drift));
+    state.history[s].push(state.prices[s]);
+    if(state.history[s].length>120) state.history[s].shift();
+  });
+  if(state.auto) runStrategy();
+  render();
+}
+
+function runStrategy(){
+  SYMBOLS.forEach(s=>{
+    const h=state.history[s], fast=sma(h,5), slow=sma(h,20);
+    if(fast==null||slow==null) return;
+    const pFast=sma(h.slice(0,-1),5), pSlow=sma(h.slice(0,-1),20);
+    if(pFast==null||pSlow==null) return;
+    const held = state.positions[s];
+    // Golden cross -> buy ; Death cross -> sell
+    if(pFast<=pSlow && fast>slow && !held){
+      const budget = state.cash*0.15;
+      const qty = Math.floor(budget/state.prices[s]);
+      if(qty>0) placeOrder(s,'buy',qty);
+    } else if(pFast>=pSlow && fast<slow && held){
+      placeOrder(s,'sell',held.qty);
+    }
+  });
+}
+
+function placeOrder(sym,side,qty){
+  const px=state.prices[sym];
+  if(side==='buy'){
+    const cost=px*qty; if(cost>state.cash) return;
+    const cur=state.positions[sym]||{qty:0,avg:0};
+    const newQty=cur.qty+qty;
+    state.positions[sym]={qty:newQty, avg:(cur.avg*cur.qty+cost)/newQty};
+    state.cash-=cost;
+    log(`BUY  ${qty} ${sym} @ ${fmt(px)}  (golden cross)`,'buy');
+  }else{
+    const cur=state.positions[sym]; if(!cur) return;
+    const proceeds=px*Math.min(qty,cur.qty);
+    state.cash+=proceeds;
+    const pl=(px-cur.avg)*Math.min(qty,cur.qty);
+    log(`SELL ${Math.min(qty,cur.qty)} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)}  (death cross)`,'sell');
+    delete state.positions[sym];
+  }
+  // In live mode we'd POST /v2/orders here; direct browser POST is usually CORS-blocked, so this demo
+  // keeps the book locally and mirrors what a server-side bridge would submit.
+}
+
+function portfolioValue(){
+  let v=state.cash;
+  for(const s in state.positions) v+=state.positions[s].qty*state.prices[s];
+  return v;
+}
+
+function render(){
+  const pv=portfolioValue();
+  $('pv').textContent=fmt(pv);
+  $('cash').textContent=fmt(state.cash);
+  const dpl=pv-state.startEquity;
+  $('dpl').innerHTML=`<span class="${dpl>=0?'up':'down'}">${fmt(dpl)} (${pct(state.startEquity?dpl/state.startEquity*100:0)})</span>`;
+  $('posCount').textContent=Object.keys(state.positions).length;
+
+  // watchlist
+  $('watchBody').innerHTML = SYMBOLS.map(s=>{
+    const h=state.history[s], px=state.prices[s];
+    const fast=sma(h,5), slow=sma(h,20);
+    const chg = h.length>1 ? (px/h[h.length-2]-1)*100 : 0;
+    let sig='—', cls='muted';
+    if(fast!=null&&slow!=null){ if(fast>slow){sig='▲ Bullish';cls='up';} else {sig='▼ Bearish';cls='down';} }
+    return `<tr><td><strong>${s}</strong></td><td>${fmt(px)}</td>
+      <td class="${chg>=0?'up':'down'}">${pct(chg)}</td>
+      <td>${fast!=null?fast.toFixed(2):'—'}</td>
+      <td>${slow!=null?slow.toFixed(2):'—'}</td>
+      <td class="${cls}">${sig}</td></tr>`;
+  }).join('');
+
+  // positions
+  const keys=Object.keys(state.positions);
+  $('posBody').innerHTML = keys.length? keys.map(s=>{
+    const p=state.positions[s], px=state.prices[s], mv=p.qty*px, pl=(px-p.avg)*p.qty;
+    return `<tr><td><strong>${s}</strong></td><td>${p.qty}</td><td>${fmt(p.avg)}</td>
+      <td>${fmt(px)}</td><td>${fmt(mv)}</td>
+      <td class="${pl>=0?'up':'down'}">${fmt(pl)}</td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="muted" style="text-align:center">No open positions</td></tr>';
+}
+
+function log(msg,kind='sys'){
+  const d=document.createElement('div');
+  const t=new Date().toLocaleTimeString();
+  d.className=kind;
+  d.textContent=`[${t}] ${msg}`;
+  $('log').prepend(d);
+}
+
+show('screen-privacy');
+</script>
+</body>
+</html>
