@@ -386,6 +386,7 @@ function roc(arr,n){ if(arr.length<n+1) return null; return (arr[arr.length-1]/a
 /* Composite score: how leading traders confirm across multiple signals
    instead of trusting one indicator. Returns {score, rsi, hist}. */
 function analyze(h){
+  if(!Array.isArray(h) || h.length<2) return {score:0,rsi:null,hist:null,atr:null};
   const ef=ema(h,3), es=ema(h,8), r=rsi(h,7), m=macd(h), a=atr(h,7),
         dh=donchianHigh(h.slice(0,-1),10), rc=roc(h,4), px=h[h.length-1];
   if(ef==null||es==null||r==null||!m||a==null||dh==null||rc==null) return {score:0,rsi:r,hist:m?m.hist:null,atr:a};
@@ -534,13 +535,14 @@ function render(){
     + ` <span class="muted">(${per5>=1?'on/above pace':'below pace'})</span>`;
 
   $('watchBody').innerHTML = SYMBOLS.map(s=>{
-    const h=state.history[s], px=state.prices[s], a=analyze(h);
+    const h=state.history[s]||[], px=state.prices[s], a=analyze(h);
     const chg = h.length>1 ? (px/h[h.length-2]-1)*100 : 0;
+    const pxTxt = (typeof px==='number') ? fmt(px) : '—';
     let sig='—', cls='muted';
     if(a.score>=3){sig='▲ Strong buy';cls='up';}
     else if(a.score>=1){sig='△ Bullish';cls='up';}
     else if(a.score<=-1){sig='▼ Bearish';cls='down';}
-    return `<tr><td><strong>${s}</strong></td><td>${fmt(px)}</td>
+    return `<tr><td><strong>${s}</strong></td><td>${pxTxt}</td>
       <td class="${chg>=0?'up':'down'}">${pct(chg)}</td>
       <td>${a.rsi!=null?a.rsi.toFixed(0):'—'}</td>
       <td class="${a.hist>=0?'up':'down'}">${a.hist!=null?a.hist.toFixed(2):'—'}</td>
