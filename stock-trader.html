@@ -258,7 +258,7 @@ function saveAccount(a){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(a));
 
 let state = {
   user:'', cash:0, startEquity:0, target:0,
-  positions:{}, prices:{}, history:{}, auto:false, reached:false,
+  positions:{}, prices:{}, history:{}, cooldown:{}, auto:false, reached:false,
   timer:null, engineTimer:null, ws:null, startTime:0,
 };
 
@@ -388,20 +388,34 @@ function atr(arr,n){ // close-to-close proxy for Average True Range
 function donchianHigh(arr,n){ if(arr.length<n) return null; return Math.max(...arr.slice(-n)); }
 function roc(arr,n){ if(arr.length<n+1) return null; return (arr[arr.length-1]/arr[arr.length-1-n]-1)*100; }
 
-/* Composite score: how leading traders confirm across multiple signals
-   instead of trusting one indicator. Returns {score, rsi, hist}. */
+/* Composite analysis. Higher selectivity = higher win rate: we only rate a setup
+   bullish when a multi-timeframe trend, accelerating momentum, and a breakout all
+   agree — and we wait for enough real data before trusting any of it.
+   Returns {score, rsi, hist, atr, trendUp, warmed, px}. */
+const MIN_HISTORY=40;   // need ~40 live samples (~40s) before signals are trustworthy
 function analyze(h){
-  if(!Array.isArray(h) || h.length<2) return {score:0,rsi:null,hist:null,atr:null};
-  const ef=ema(h,3), es=ema(h,8), r=rsi(h,7), m=macd(h), a=atr(h,7),
-        dh=donchianHigh(h.slice(0,-1),10), rc=roc(h,4), px=h[h.length-1];
-  if(ef==null||es==null||r==null||!m||a==null||dh==null||rc==null) return {score:0,rsi:r,hist:m?m.hist:null,atr:a};
+  if(!Array.isArray(h) || h.length<2) return {score:0,rsi:null,hist:null,atr:null,trendUp:false,warmed:false,px:null};
+  const px=h[h.length-1];
+  const warmed = h.length>=MIN_HISTORY;
+  // three-timeframe EMAs: fast/mid/slow define the trend regime
+  const ef=ema(h,5), em=ema(h,13), es=ema(h,34);
+  const r=rsi(h,14), a=atr(h,14), rc=roc(h,10);
+  const m=macd(h), mPrev=macd(h.slice(0,-1));
+  if(!warmed || ef==null||em==null||es==null||r==null||a==null||rc==null||!m||!mPrev){
+    return {score:0,rsi:r,hist:m?m.hist:null,atr:a,trendUp:false,warmed,px};
+  }
+  const dh=donchianHigh(h.slice(0,-1),20);          // breakout reference (excludes current)
+  const histRising = m.hist > mPrev.hist;            // momentum accelerating, not just positive
+  const trendUp = ef>em && em>es;                    // aligned uptrend across timeframes
   let score=0;
-  score += ef>es ? 1 : -1;                 // EMA crossover (trend/momentum)
-  score += m.hist>0 ? 1 : -1;              // MACD histogram (trend confirmation)
-  if(r<30) score+=1; else if(r>70) score-=1; // RSI overbought/oversold timing
-  if(px>dh) score+=1;                       // Donchian breakout (Turtle entry)
-  score += rc>0 ? 1 : -1;                   // momentum / rate of change
-  return {score, rsi:r, hist:m.hist, atr:a};
+  score += ef>em ? 1 : -1;                           // short vs mid trend
+  score += em>es ? 1 : -1;                           // mid vs long trend (regime)
+  score += m.hist>0 ? 1 : -1;                        // MACD momentum sign
+  score += histRising ? 1 : -1;                      // MACD momentum acceleration
+  score += rc>0 ? 1 : -1;                            // rate of change
+  if(dh!=null && px>dh) score+=1;                    // Donchian breakout (Turtle entry)
+  if(r>75 || r<25) score-=1;                         // avoid overextended entries (mean-revert risk)
+  return {score, rsi:r, hist:m.hist, atr:a, trendUp, warmed, px};
 }
 
 /* ---------- Live market data (Finnhub real-time quotes) ---------- */
@@ -503,44 +517,53 @@ function checkTarget(){
 const RISK_PCT=0.02;        // base 2% rule: risk ~2% of equity per trade
 const STOP_ATR=1.5;         // stop-loss distance = 1.5 x ATR
 const TARGET_ATR=2.5;       // take-profit distance = 2.5 x ATR (reward > risk)
-const ENTRY_SCORE=2;        // act once at least 2 signals confirm (more opportunities)
+const ENTRY_SCORE=4;        // selective: need a strong, aligned setup before entering
 const MAX_RISK_PCT=0.10;    // cap a single high-conviction trade at 10% of equity at risk
+const TRAIL_ATR=1.2;        // once in profit, trail the stop 1.2 x ATR below the peak
+const ARM_TRAIL_ATR=1.0;    // arm the trailing stop after price runs 1 x ATR in our favor
+const COOLDOWN_MS=12000;    // after exiting a symbol, wait before re-entering (kills whipsaws)
 
 function runStrategy(){
   const equity=portfolioValue();
-  // Find the freshest opportunities and commit the most capital to the strongest ones.
+  const now=Date.now();
+  // Rank tradeable setups; commit the most capital to the strongest, trend-aligned ones.
   const ranked=SYMBOLS
     .map(s=>({s, px:state.prices[s], a:analyze(state.history[s])}))
     .filter(o=>typeof o.px==='number')
-    .sort((x,y)=>y.a.score-x.a.score); // strongest signal first
+    .sort((x,y)=>y.a.score-x.a.score);
   ranked.forEach(({s,px,a})=>{
     const held=state.positions[s];
-    if(!held && a.score>=ENTRY_SCORE && a.atr>0){
-      // conviction-weighted: scale risk with how many signals agree (score 2..5 -> ~2%..10%)
-      const conviction=Math.min(a.score,5)/3;            // 2->0.67, 3->1.0, 4->1.33, 5->1.67
+    const cooling = state.cooldown[s] && (now - state.cooldown[s] < COOLDOWN_MS);
+    // ENTRY: only with a confirmed uptrend, a strong score, warmed-up data, and not cooling off.
+    if(!held && a.warmed && a.trendUp && a.score>=ENTRY_SCORE && a.atr>0 && !cooling){
+      const conviction=Math.min(a.score,6)/4;            // 4->1.0, 5->1.25, 6->1.5
       const riskPct=Math.min(RISK_PCT*conviction*2, MAX_RISK_PCT);
       const stopDist=STOP_ATR*a.atr;
       let qty=Math.floor((equity*riskPct)/stopDist);
-      const maxByCash=Math.floor((state.cash*0.95)/px); // never spend more cash than we have
+      const maxByCash=Math.floor((state.cash*0.95)/px);
       qty=Math.min(qty,maxByCash);
       if(qty>0) openTrade(s,qty,px,a.atr);
-    }else if(held && a.score<=-1){
-      closeTrade(s,px,'signal reversal');
+    }
+    // EXIT on signal: trend or momentum has rolled over (cut losers / lock the thesis break).
+    else if(held && a.warmed && (!a.trendUp || a.score<=0)){
+      closeTrade(s,px,'signal exit');
     }
   });
 }
 
 function openTrade(sym,qty,px,a){
   const cost=px*qty; if(cost>state.cash || qty<=0) return;
-  state.positions[sym]={qty, avg:px, stop:px-STOP_ATR*a, target:px+TARGET_ATR*a};
+  // store entry ATR + running peak so manageOpenPositions can trail the stop
+  state.positions[sym]={qty, avg:px, atr:a, peak:px, stop:px-STOP_ATR*a, target:px+TARGET_ATR*a};
   state.cash-=cost;
-  log(`BUY  ${qty} ${sym} @ ${fmt(px)}  (score confirmed · stop ${fmt(px-STOP_ATR*a)})`,'buy');
+  log(`BUY  ${qty} ${sym} @ ${fmt(px)}  (trend-confirmed · stop ${fmt(px-STOP_ATR*a)})`,'buy');
 }
 
 function closeTrade(sym,px,reason){
   const cur=state.positions[sym]; if(!cur) return;
   const proceeds=px*cur.qty, pl=(px-cur.avg)*cur.qty;
   state.cash+=proceeds;
+  state.cooldown[sym]=Date.now();                   // start cooldown to avoid instant re-entry
   log(`SELL ${cur.qty} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)}  (${reason})`, pl>=0?'sell':'sell');
   delete state.positions[sym];
 }
@@ -548,7 +571,14 @@ function closeTrade(sym,px,reason){
 function manageOpenPositions(){
   for(const s of Object.keys(state.positions)){
     const p=state.positions[s], px=state.prices[s];
-    if(px<=p.stop) closeTrade(s,px,'stop-loss');
+    if(typeof px!=='number') continue;
+    if(px>p.peak) p.peak=px;                         // track the high-water mark
+    // trailing stop: once price has run ARM_TRAIL_ATR in our favor, ratchet the stop up under the peak
+    if(p.peak >= p.avg + ARM_TRAIL_ATR*p.atr){
+      const trail = p.peak - TRAIL_ATR*p.atr;
+      if(trail > p.stop) p.stop = trail;             // only ever moves up, locking in gains
+    }
+    if(px<=p.stop) closeTrade(s,px, p.stop>p.avg ? 'trailing-stop (profit locked)' : 'stop-loss');
     else if(px>=p.target) closeTrade(s,px,'take-profit');
   }
 }
@@ -584,9 +614,10 @@ function render(){
     const chg = h.length>1 ? (px/h[h.length-2]-1)*100 : 0;
     const pxTxt = (typeof px==='number') ? fmt(px) : '—';
     let sig='—', cls='muted';
-    if(a.score>=3){sig='▲ Strong buy';cls='up';}
-    else if(a.score>=1){sig='△ Bullish';cls='up';}
-    else if(a.score<=-1){sig='▼ Bearish';cls='down';}
+    if(!a.warmed){sig='◷ warming up';cls='muted';}
+    else if(a.trendUp && a.score>=ENTRY_SCORE){sig='▲ Strong buy';cls='up';}
+    else if(a.trendUp && a.score>=2){sig='△ Bullish';cls='up';}
+    else if(a.score<=0){sig='▼ Bearish';cls='down';}
     return `<tr><td><strong>${s}</strong></td><td>${pxTxt}</td>
       <td class="${chg>=0?'up':'down'}">${pct(chg)}</td>
       <td>${a.rsi!=null?a.rsi.toFixed(0):'—'}</td>
