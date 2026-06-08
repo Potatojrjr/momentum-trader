@@ -3,9 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Momentum Trader — Paper Account</title>
+<title>Momentum Trader</title>
 <style>
   :root{
+    color-scheme:light;
     --bg:#0b0f1a; --panel:#121a2b; --panel2:#1a2540; --line:#243353;
     --txt:#e6ecf7; --muted:#8a99b8; --accent:#4f8cff; --green:#23c87b;
     --red:#ff5c6c; --amber:#ffb547; --radius:14px;
@@ -22,6 +23,7 @@
   .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#7b5bff);
     display:grid;place-items:center;font-weight:800;color:#fff}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
+  .narrow{max-width:440px;margin:40px auto}
   .muted{color:var(--muted)}
   .pill{display:inline-block;font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
   .pill.live{color:var(--green);border-color:rgba(35,200,123,.4)}
@@ -29,7 +31,7 @@
   button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);
     background:var(--panel2);color:var(--txt);padding:11px 16px;transition:.15s}
   button:hover{border-color:var(--accent)}
-  button.primary{background:linear-gradient(135deg,var(--accent),#6a7bff);border:none;color:#fff;font-weight:600}
+  button.primary{background:linear-gradient(135deg,var(--accent),#6a7bff);border:none;color:#fff;font-weight:600;width:100%}
   button.primary:disabled{opacity:.45;cursor:not-allowed}
   button.ghost{background:transparent}
   button.danger{background:rgba(255,92,108,.12);border-color:rgba(255,92,108,.4);color:var(--red)}
@@ -37,14 +39,14 @@
     background:#0d1424;color:var(--txt);margin-top:6px}
   label.field{display:block;margin-bottom:14px;font-size:14px}
   .row{display:flex;gap:14px;flex-wrap:wrap}
-  .row>*{flex:1;min-width:200px}
+  .row>*{flex:1;min-width:160px}
   .check{display:flex;gap:11px;align-items:flex-start;margin:12px 0;font-size:14px;line-height:1.4}
   .check input{width:18px;height:18px;margin-top:2px;flex:0 0 auto}
   .disclaimer{background:var(--panel2);border-left:3px solid var(--amber);padding:14px 16px;border-radius:8px;margin:14px 0;font-size:13.5px;color:#cdd8ef}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
   .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px}
   .stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .stat .v{font-size:24px;font-weight:700;margin-top:6px}
+  .stat .v{font-size:22px;font-weight:700;margin-top:6px}
   table{width:100%;border-collapse:collapse;font-size:14px}
   th,td{text-align:right;padding:10px 8px;border-bottom:1px solid var(--line)}
   th:first-child,td:first-child{text-align:left}
@@ -58,11 +60,14 @@
   .slider:before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
   .switch input:checked + .slider{background:var(--green)}
   .switch input:checked + .slider:before{transform:translateX(20px)}
-  .log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;max-height:230px;overflow:auto}
+  .log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;max-height:210px;overflow:auto}
   .log div{padding:5px 0;border-bottom:1px solid #1b2740;color:#bccbe9}
-  .log .buy{color:var(--green)} .log .sell{color:var(--red)} .log .sys{color:var(--muted)}
+  .log .buy{color:var(--green)} .log .sell{color:var(--red)} .log .sys{color:var(--muted)} .log .win{color:var(--amber)}
   .badge{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--panel2);color:var(--muted)}
   .footnote{font-size:12px;color:var(--muted);margin-top:8px}
+  .err{color:var(--red);font-size:13px;margin-top:4px;min-height:18px}
+  .bar{height:10px;border-radius:999px;background:#0d1424;border:1px solid var(--line);overflow:hidden;margin-top:10px}
+  .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--green));width:0%}
   a{color:var(--accent)}
 </style>
 </head>
@@ -73,74 +78,85 @@
     <div class="logo">M</div>
     <div>
       <h1 style="margin:0">Momentum Trader</h1>
-      <div class="muted" style="font-size:13px">Paper-account algorithmic trading demo</div>
+      <div class="muted" style="font-size:13px">Goal-based paper-trading account</div>
     </div>
   </div>
 
-  <!-- ============ SCREEN 1: PRIVACY & RISK ============ -->
-  <section id="screen-privacy">
-    <div class="card">
-      <h2>Privacy, Security &amp; Risk Disclosure</h2>
-      <p>Before you use this app, please read and respond to the following. You must agree to all items to continue, or you can decline and close the app.</p>
+  <!-- ============ SCREEN 0: AUTH ============ -->
+  <section id="screen-auth">
+    <div class="card narrow">
+      <h2 id="authTitle">Create your account</h2>
+      <p id="authSub">Register a username and password. The username can be registered only once on this device — after that, you'll log in with it.</p>
 
-      <div class="disclaimer">
-        <strong>This is a paper-trading (simulated) application.</strong> It does <u>not</u> ask for your bank login,
-        debit/credit card, or banking passwords, and it cannot move real money. It connects only to a brokerage
-        <em>paper (sandbox) account</em> using API keys you generate yourself. No real funds are ever at risk.
-      </div>
+      <label class="field">Username
+        <input id="username" type="text" autocomplete="off" placeholder="choose a username">
+      </label>
+      <label class="field">Password
+        <input id="password" type="password" autocomplete="off" placeholder="choose a password">
+      </label>
+      <label class="field" id="confirmWrap">Confirm password
+        <input id="password2" type="password" autocomplete="off" placeholder="re-enter password">
+      </label>
 
-      <h3 style="margin-top:18px">What data this app touches</h3>
-      <p style="margin-top:4px">Your Alpaca <strong>paper API key &amp; secret</strong> are kept only in your browser's memory for this
-      session and are sent directly to the broker's servers to fetch your simulated account. They are never sent to
-      Anthropic, never stored on disk, and disappear when you close the tab.</p>
+      <div class="err" id="authErr"></div>
+      <button id="authBtn" class="primary">Register</button>
 
-      <h3 style="margin-top:18px">Security concerns you should know</h3>
-      <p style="margin-top:4px">Even paper API keys should be treated as secrets — never paste real <em>live</em> trading keys here.
-      Browsers can be inspected by anyone with access to your computer. Use this only on a device you trust.</p>
-
-      <h3 style="margin-top:18px">Investment risk</h3>
-      <p style="margin-top:4px">Algorithmic strategies, including the moving-average momentum strategy used here, can and do lose money.
-      Past performance does not predict future results. Nothing in this app is financial advice. This tool is for
-      education and experimentation with simulated funds only.</p>
-
-      <div style="margin-top:20px">
-        <label class="check"><input type="checkbox" class="agree"> I understand this is a <strong>simulated / paper-trading</strong> app that cannot move real money.</label>
-        <label class="check"><input type="checkbox" class="agree"> I will only enter <strong>paper (sandbox) API keys</strong>, never live banking or live trading credentials.</label>
-        <label class="check"><input type="checkbox" class="agree"> I understand my keys stay in my browser session and are sent only to the broker, not to Anthropic.</label>
-        <label class="check"><input type="checkbox" class="agree"> I understand algorithmic trading carries risk and <strong>nothing here is financial advice</strong>.</label>
-      </div>
-
-      <div class="row" style="margin-top:18px">
-        <button id="declineBtn" class="danger" style="flex:0 0 auto">Decline &amp; Exit</button>
-        <button id="agreeBtn" class="primary" style="flex:0 0 auto" disabled>I Agree — Continue</button>
+      <p class="footnote" id="authSwitch"></p>
+      <div class="disclaimer" style="margin-top:14px">
+        Your login is stored only in this browser, on this device. This is a demo-grade lock — please don't reuse
+        a real password. There is no password recovery.
       </div>
     </div>
   </section>
 
-  <!-- ============ SCREEN 2: CONNECT ============ -->
-  <section id="screen-connect" class="hidden">
+  <!-- ============ SCREEN 1: PRIVACY & RISK ============ -->
+  <section id="screen-privacy" class="hidden">
     <div class="card">
-      <h2>Connect your brokerage paper account</h2>
-      <p>Enter your <strong>Alpaca paper trading</strong> API keys. Create free keys at
-      <a href="https://app.alpaca.markets/paper/dashboard/overview" target="_blank" rel="noopener">Alpaca's paper dashboard</a>
-      (look for "Generate API Keys" under the Paper Trading account).</p>
+      <h2>Privacy, Security &amp; Risk Disclosure</h2>
+      <p>Please read and respond before continuing. You must agree to all items, or you can decline and exit.</p>
 
-      <label class="field">API Key ID
-        <input id="apiKey" type="text" placeholder="PK..." autocomplete="off">
+      <div class="disclaimer">
+        <strong>This is a paper-trading (simulated) app.</strong> It does not ask for your bank login, card, or
+        banking passwords, and it cannot move real money. All trading happens with simulated funds.
+      </div>
+
+      <h3 style="margin-top:18px">Data &amp; security</h3>
+      <p style="margin-top:4px">Your login and account state are kept only in this browser on this device, and are never
+      sent to Anthropic or any server. Anyone with access to this computer could view them, so use a device you trust.</p>
+
+      <h3 style="margin-top:18px">Investment risk</h3>
+      <p style="margin-top:4px">The moving-average momentum strategy used here can lose money. The app will keep trading
+      toward your target, but reaching it is not guaranteed and equity can fall. Nothing here is financial advice.</p>
+
+      <div style="margin-top:20px">
+        <label class="check"><input type="checkbox" class="agree"> I understand this is a <strong>simulated</strong> app that cannot move real money.</label>
+        <label class="check"><input type="checkbox" class="agree"> I understand my data stays in this browser and is not sent to Anthropic.</label>
+        <label class="check"><input type="checkbox" class="agree"> I understand trading carries risk, my target is <strong>not guaranteed</strong>, and this is not financial advice.</label>
+      </div>
+
+      <div class="row" style="margin-top:18px">
+        <button id="declineBtn" class="danger" style="flex:0 0 auto">Decline &amp; Exit</button>
+        <button id="agreeBtn" class="primary" style="flex:0 0 auto;width:auto" disabled>I Agree — Continue</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCREEN 2: SETUP ============ -->
+  <section id="screen-setup" class="hidden">
+    <div class="card narrow">
+      <h2>Set up your account</h2>
+      <p>Enter how much (simulated) cash you're funding the account with, and the target value you want the
+      auto-trader to reach. It will trade automatically until your portfolio hits the target, then stop.</p>
+
+      <label class="field">Starting cash ($)
+        <input id="startCash" type="number" min="100" step="100" value="10000">
       </label>
-      <label class="field">API Secret Key
-        <input id="apiSecret" type="password" placeholder="your paper secret" autocomplete="off">
+      <label class="field">Target to reach ($)
+        <input id="targetAmt" type="number" min="100" step="100" value="12000">
       </label>
 
-      <div class="row">
-        <button id="connectBtn" class="primary" style="flex:0 0 auto">Connect</button>
-        <button id="simBtn" class="ghost" style="flex:0 0 auto">Skip — run in Simulation Mode</button>
-      </div>
-      <p class="footnote" id="connectMsg"></p>
-      <div class="disclaimer" style="margin-top:14px">
-        Browsers sometimes block direct calls to brokerage APIs (CORS). If the connection fails, the app
-        automatically falls back to a fully-featured <strong>local simulation</strong> so you can still try everything.
-      </div>
+      <div class="err" id="setupErr"></div>
+      <button id="setupBtn" class="primary">Start Trading Account</button>
     </div>
   </section>
 
@@ -149,29 +165,45 @@
     <div class="topbar">
       <div style="display:flex;align-items:center;gap:12px">
         <h2 style="margin:0">Dashboard</h2>
-        <span id="modePill" class="pill sim">Simulation</span>
+        <span id="modePill" class="pill sim">Connecting…</span>
+        <span class="muted" style="font-size:13px" id="userTag"></span>
       </div>
-      <div class="toggle">
-        <span style="font-size:13px">Auto-Trade</span>
-        <label class="switch"><input type="checkbox" id="autoToggle"><span class="slider"></span></label>
-        <span id="autoState" class="muted" style="font-size:13px">Off</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="toggle">
+          <span style="font-size:13px">Auto-Trade</span>
+          <label class="switch"><input type="checkbox" id="autoToggle"><span class="slider"></span></label>
+          <span id="autoState" class="muted" style="font-size:13px">Off</span>
+        </div>
+        <button id="logoutBtn" class="ghost" style="padding:8px 12px;font-size:13px">Log out</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <h3 style="margin:0">Goal progress</h3>
+        <span class="muted" id="goalText" style="font-size:13px"></span>
+      </div>
+      <div class="bar"><span id="goalBar"></span></div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px;font-size:13px">
+        <span class="muted">Earnings pace (target $1.00 / 5s)</span>
+        <span id="goalPace" class="muted"></span>
       </div>
     </div>
 
     <div class="grid" style="margin-bottom:18px">
       <div class="stat"><div class="k">Portfolio Value</div><div class="v" id="pv">$0</div></div>
       <div class="stat"><div class="k">Cash</div><div class="v" id="cash">$0</div></div>
-      <div class="stat"><div class="k">Day P/L</div><div class="v" id="dpl">$0</div></div>
-      <div class="stat"><div class="k">Open Positions</div><div class="v" id="posCount">0</div></div>
+      <div class="stat"><div class="k">Total P/L</div><div class="v" id="dpl">$0</div></div>
+      <div class="stat"><div class="k">Target</div><div class="v" id="targetStat">$0</div></div>
     </div>
 
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <h3 style="margin:0">Watchlist &amp; Signals</h3>
-        <span class="badge">MA crossover · 5/20 period</span>
+        <span class="badge">EMA · MACD · RSI · Donchian · momentum</span>
       </div>
       <table style="margin-top:12px">
-        <thead><tr><th>Symbol</th><th>Price</th><th>Chg%</th><th>Fast MA</th><th>Slow MA</th><th>Signal</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Price</th><th>Chg%</th><th>RSI</th><th>MACD</th><th>Score</th><th>Signal</th></tr></thead>
         <tbody id="watchBody"></tbody>
       </table>
     </div>
@@ -185,169 +217,294 @@
     </div>
 
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 style="margin:0">Activity Log</h3>
-        <button id="resetBtn" class="ghost" style="flex:0 0 auto;padding:7px 12px;font-size:13px">Reset Demo</button>
-      </div>
+      <h3>Activity Log</h3>
       <div class="log" id="log" style="margin-top:10px"></div>
     </div>
 
-    <p class="footnote">Paper-trading demo. No real money is involved. Not financial advice.</p>
+    <p class="footnote">Real-time prices via Finnhub (US market hours). Trades are paper/simulated — no real money. Not financial advice.</p>
   </section>
 
 </div>
 
 <script>
 /* ============================================================
-   Momentum Trader — single-file paper trading demo
-   - Strategy: 5/20 simple moving-average crossover (momentum)
-   - Tries Alpaca paper API; falls back to local simulation
+   Momentum Trader — goal-based paper trading demo
+   - Register-once login (stored locally on this device)
+   - User sets starting cash + target; engine auto-trades until target hit
+   - Strategy: 5/20 SMA crossover (momentum), real-time tick engine
    ============================================================ */
 
 const $ = id => document.getElementById(id);
-const show = id => { ['screen-privacy','screen-connect','screen-dash'].forEach(s=>$(s).classList.add('hidden')); $(id).classList.remove('hidden'); };
+const SCREENS = ['screen-auth','screen-privacy','screen-setup','screen-dash'];
+const show = id => { SCREENS.forEach(s=>$(s).classList.add('hidden')); $(id).classList.remove('hidden'); };
 const fmt = n => (n<0?'-$':'$') + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct = n => (n>=0?'+':'') + n.toFixed(2) + '%';
 
 const SYMBOLS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL'];
 const SEED_PRICE = {AAPL:212,MSFT:438,NVDA:121,TSLA:178,AMZN:198,GOOGL:176};
+const STORE_KEY = 'mt_account_v2';
+const FINNHUB_KEY = 'd8hqgjhr01qrn5edkmlgd8hqgjhr01qrn5edkmm0'; // free real-time quotes
+const POLL_MS = 8000; // 6 symbols / 8s = 45 calls/min, under Finnhub's free 60/min limit
+
+/* simple non-cryptographic hash — demo-grade only */
+function hash(str){
+  let h=5381; for(let i=0;i<str.length;i++){ h=((h<<5)+h)+str.charCodeAt(i); h|=0; }
+  return (h>>>0).toString(16);
+}
+function readAccount(){ try{ return JSON.parse(localStorage.getItem(STORE_KEY)||'null'); }catch(e){ return null; } }
+function saveAccount(a){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(a)); }catch(e){} }
 
 let state = {
-  mode:'sim',            // 'live' or 'sim'
-  api:{key:'',secret:''},
-  cash:100000,
-  startEquity:100000,
-  positions:{},          // sym -> {qty, avg}
-  prices:{},             // sym -> current price
-  history:{},            // sym -> [prices]
-  auto:false,
-  timer:null,
+  user:'', cash:0, startEquity:0, target:0,
+  positions:{}, prices:{}, history:{}, auto:false, reached:false, timer:null, startTime:0,
 };
+
+/* ---------- Screen 0: auth (register once, then login) ---------- */
+function initAuth(){
+  const acct = readAccount();
+  if(acct){
+    $('authTitle').textContent='Log in';
+    $('authSub').textContent='Welcome back. Enter your username and password to access your account.';
+    $('confirmWrap').classList.add('hidden');
+    $('authBtn').textContent='Log in';
+    $('authSwitch').innerHTML='Wrong account? You can <a href="#" id="resetAcct">reset and register a new one</a> (erases the saved account).';
+    $('resetAcct').onclick=(e)=>{e.preventDefault(); if(confirm('Erase the saved account and register again? This cannot be undone.')){ localStorage.removeItem(STORE_KEY); initAuth(); }};
+  }else{
+    $('authTitle').textContent='Create your account';
+    $('authSub').textContent='Register a username and password. The username can be registered only once on this device — after that, you’ll log in with it.';
+    $('confirmWrap').classList.remove('hidden');
+    $('authBtn').textContent='Register';
+    $('authSwitch').textContent='';
+  }
+}
+$('authBtn').onclick = () => {
+  const acct=readAccount();
+  const u=$('username').value.trim(), p=$('password').value;
+  $('authErr').textContent='';
+  if(!u || !p){ $('authErr').textContent='Enter a username and password.'; return; }
+  if(acct){
+    if(u!==acct.user || hash(p)!==acct.hash){ $('authErr').textContent='Incorrect username or password.'; return; }
+    state.user=u; afterAuth();
+  }else{
+    if(p.length<4){ $('authErr').textContent='Use a password of at least 4 characters.'; return; }
+    if(p!==$('password2').value){ $('authErr').textContent='Passwords do not match.'; return; }
+    saveAccount({user:u, hash:hash(p)});
+    state.user=u; afterAuth();
+  }
+};
+function afterAuth(){ $('password').value=''; $('password2').value=''; show('screen-privacy'); }
 
 /* ---------- Screen 1: privacy gate ---------- */
 const agrees = () => [...document.querySelectorAll('.agree')];
-agrees().forEach(c => c.addEventListener('change', ()=>{
-  $('agreeBtn').disabled = !agrees().every(c=>c.checked);
-}));
+agrees().forEach(c => c.addEventListener('change', ()=>{ $('agreeBtn').disabled = !agrees().every(c=>c.checked); }));
 $('declineBtn').onclick = () => {
   document.body.innerHTML =
     '<div style="max-width:560px;margin:80px auto;text-align:center;font-family:sans-serif;color:#e6ecf7">'+
-    '<h1>You declined the terms</h1><p style="color:#8a99b8">No data was collected and nothing was connected. '+
-    'You can close this tab. Reload the page if you change your mind.</p></div>';
+    '<h1>You declined the terms</h1><p style="color:#8a99b8">Nothing was started. You can close this tab, '+
+    'or reload to return.</p></div>';
 };
-$('agreeBtn').onclick = () => show('screen-connect');
+$('agreeBtn').onclick = () => show('screen-setup');
 
-/* ---------- Screen 2: connect ---------- */
-$('simBtn').onclick = () => startSim('You chose Simulation Mode.');
-
-$('connectBtn').onclick = async () => {
-  const key = $('apiKey').value.trim(), secret = $('apiSecret').value.trim();
-  if(!key || !secret){ $('connectMsg').textContent = 'Enter both the key and secret, or use Simulation Mode.'; return; }
-  $('connectMsg').textContent = 'Connecting to Alpaca paper account…';
-  $('connectBtn').disabled = true;
-  try{
-    const res = await fetch('https://paper-api.alpaca.markets/v2/account', {
-      headers:{'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':secret}
-    });
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const acct = await res.json();
-    state.mode='live'; state.api={key,secret};
-    state.cash = parseFloat(acct.cash);
-    state.startEquity = parseFloat(acct.last_equity || acct.equity || acct.cash);
-    $('modePill').className='pill live'; $('modePill').textContent='Live Paper Account';
-    seedPrices();
-    enterDash('Connected to Alpaca paper account. Cash: '+fmt(state.cash));
-  }catch(err){
-    // Most commonly CORS / network block in-browser — fall back gracefully.
-    startSim('Direct broker connection blocked by the browser ('+err.message+'). Falling back to Simulation Mode.');
-  }finally{
-    $('connectBtn').disabled = false;
-  }
+/* ---------- Screen 2: setup cash + target ---------- */
+$('setupBtn').onclick = () => {
+  const cash=parseFloat($('startCash').value), target=parseFloat($('targetAmt').value);
+  $('setupErr').textContent='';
+  if(!(cash>0)){ $('setupErr').textContent='Enter a starting cash amount above 0.'; return; }
+  if(!(target>cash)){ $('setupErr').textContent='Your target must be higher than your starting cash.'; return; }
+  state.cash=cash; state.startEquity=cash; state.target=target;
+  state.positions={}; state.reached=false; state.auto=false; state.startTime=Date.now();
+  $('autoToggle').checked=false; $('autoState').textContent='Off';
+  enterDash();
 };
-
-function startSim(reason){
-  state.mode='sim'; state.cash=100000; state.startEquity=100000; state.positions={};
-  $('modePill').className='pill sim'; $('modePill').textContent='Simulation';
-  seedPrices();
-  enterDash(reason);
-}
 
 function seedPrices(){
   SYMBOLS.forEach(s=>{
     state.prices[s]=SEED_PRICE[s];
-    state.history[s]=Array.from({length:20},(_,i)=>SEED_PRICE[s]*(1+(Math.random()-0.5)*0.01));
+    state.history[s]=Array.from({length:20},()=>SEED_PRICE[s]*(1+(Math.random()-0.5)*0.01));
     state.history[s].push(SEED_PRICE[s]);
   });
 }
 
 /* ---------- Screen 3: dashboard + engine ---------- */
-function enterDash(msg){
+function enterDash(){
   show('screen-dash');
-  log(msg,'sys');
-  log('Strategy ready: 5/20 SMA crossover. Toggle Auto-Trade to let the engine trade for you.','sys');
+  $('userTag').textContent='@'+state.user;
+  $('targetStat').textContent=fmt(state.target);
+  $('log').innerHTML='';
+  log('Account funded with '+fmt(state.cash)+'. Target: '+fmt(state.target)+'.','sys');
+  log('Strategy ready: multi-indicator (EMA + MACD + RSI + Donchian + momentum) with 2% risk sizing, stop-loss & take-profit.','sys');
   render();
-  if(state.timer) clearInterval(state.timer);
-  state.timer = setInterval(tick, 2000);
+  startLive();
 }
 
 $('autoToggle').onchange = e => {
-  state.auto = e.target.checked;
-  $('autoState').textContent = state.auto?'On':'Off';
-  log('Auto-Trade '+(state.auto?'ENABLED — engine will place orders on crossovers.':'disabled.'),'sys');
+  if(state.reached && e.target.checked){ e.target.checked=false; return; }
+  state.auto=e.target.checked;
+  $('autoState').textContent=state.auto?'On':'Off';
+  log('Auto-Trade '+(state.auto?'ENABLED — trading toward your target.':'paused.'),'sys');
 };
-$('resetBtn').onclick = () => { state.mode==='live'?startSim('Demo reset to Simulation Mode.'):startSim('Demo reset.'); $('autoToggle').checked=false; state.auto=false; $('autoState').textContent='Off'; };
+$('logoutBtn').onclick = () => {
+  if(state.timer) clearInterval(state.timer);
+  state.auto=false;
+  initAuth(); show('screen-auth');
+};
 
+/* ---------- Technical indicators (documented, public methods) ---------- */
 function sma(arr,n){ if(arr.length<n) return null; const s=arr.slice(-n); return s.reduce((a,b)=>a+b,0)/n; }
+function emaSeries(arr,n){
+  if(arr.length<n) return null;
+  const k=2/(n+1); let e=arr.slice(0,n).reduce((a,b)=>a+b,0)/n; const out=[e];
+  for(let i=n;i<arr.length;i++){ e=arr[i]*k+e*(1-k); out.push(e); }
+  return out;
+}
+function ema(arr,n){ const s=emaSeries(arr,n); return s?s[s.length-1]:null; }
+function rsi(arr,n){
+  if(arr.length<n+1) return null;
+  let g=0,l=0;
+  for(let i=arr.length-n;i<arr.length;i++){ const d=arr[i]-arr[i-1]; if(d>=0) g+=d; else l-=d; }
+  if(l===0) return 100;
+  const rs=(g/n)/(l/n); return 100-100/(1+rs);
+}
+function macd(arr,f=6,s=13,sig=5){
+  const ef=emaSeries(arr,f), es=emaSeries(arr,s);
+  if(!ef||!es) return null;
+  const off=ef.length-es.length;
+  const line=es.map((v,i)=>ef[i+off]-v);
+  const sg=emaSeries(line,sig);
+  if(!sg) return {hist:line[line.length-1]-line[line.length-1]};
+  const hist=line[line.length-1]-sg[sg.length-1];
+  return {macd:line[line.length-1], signal:sg[sg.length-1], hist};
+}
+function atr(arr,n){ // close-to-close proxy for Average True Range
+  if(arr.length<n+1) return null;
+  let s=0; for(let i=arr.length-n;i<arr.length;i++) s+=Math.abs(arr[i]-arr[i-1]);
+  return s/n;
+}
+function donchianHigh(arr,n){ if(arr.length<n) return null; return Math.max(...arr.slice(-n)); }
+function roc(arr,n){ if(arr.length<n+1) return null; return (arr[arr.length-1]/arr[arr.length-1-n]-1)*100; }
 
-function tick(){
-  // Advance simulated prices (random walk with mild drift). In live mode this stands in for a quote feed.
-  SYMBOLS.forEach(s=>{
-    const drift = (Math.random()-0.48)*0.012;
-    state.prices[s] = Math.max(1, state.prices[s]*(1+drift));
-    state.history[s].push(state.prices[s]);
-    if(state.history[s].length>120) state.history[s].shift();
+/* Composite score: how leading traders confirm across multiple signals
+   instead of trusting one indicator. Returns {score, rsi, hist}. */
+function analyze(h){
+  const ef=ema(h,3), es=ema(h,8), r=rsi(h,7), m=macd(h), a=atr(h,7),
+        dh=donchianHigh(h.slice(0,-1),10), rc=roc(h,4), px=h[h.length-1];
+  if(ef==null||es==null||r==null||!m||a==null||dh==null||rc==null) return {score:0,rsi:r,hist:m?m.hist:null,atr:a};
+  let score=0;
+  score += ef>es ? 1 : -1;                 // EMA crossover (trend/momentum)
+  score += m.hist>0 ? 1 : -1;              // MACD histogram (trend confirmation)
+  if(r<30) score+=1; else if(r>70) score-=1; // RSI overbought/oversold timing
+  if(px>dh) score+=1;                       // Donchian breakout (Turtle entry)
+  score += rc>0 ? 1 : -1;                   // momentum / rate of change
+  return {score, rsi:r, hist:m.hist, atr:a};
+}
+
+/* ---------- Live market data (Finnhub real-time quotes) ---------- */
+async function fetchQuote(sym){
+  const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${FINNHUB_KEY}`);
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const j=await r.json();
+  if(typeof j.c!=='number' || j.c===0) throw new Error('no price');
+  return j.c; // current real price
+}
+
+async function startLive(){
+  $('modePill').className='pill sim'; $('modePill').textContent='Connecting…';
+  let ok=0;
+  try{
+    const res=await Promise.allSettled(SYMBOLS.map(fetchQuote));
+    res.forEach((p,i)=>{
+      const s=SYMBOLS[i];
+      if(p.status==='fulfilled'){
+        state.prices[s]=p.value;
+        state.history[s]=Array.from({length:20},()=>p.value); // seed so indicators are defined
+        ok++;
+      }
+    });
+  }catch(e){}
+  if(ok===0){
+    $('modePill').className='pill sim'; $('modePill').textContent='No live data';
+    log('Could not reach Finnhub. Live prices need internet access — open this file in your own browser or host it (GitHub Pages). It also will not load inside the in-app preview, which blocks outside connections.','sys');
+    render();
+    return;
+  }
+  $('modePill').className='pill live'; $('modePill').textContent='Live · Finnhub';
+  log('Connected to real-time prices via Finnhub ('+ok+'/'+SYMBOLS.length+' symbols). Indicators warm up as live ticks arrive. Note: US prices only move during market hours (9:30am–4:00pm ET).','sys');
+  render();
+  if(state.timer) clearInterval(state.timer);
+  state.timer=setInterval(liveTick,POLL_MS);
+}
+
+async function liveTick(){
+  const res=await Promise.allSettled(SYMBOLS.map(fetchQuote));
+  let ok=0;
+  res.forEach((p,i)=>{
+    const s=SYMBOLS[i];
+    if(p.status==='fulfilled'){
+      state.prices[s]=p.value;
+      (state.history[s]=state.history[s]||[]).push(p.value);
+      if(state.history[s].length>200) state.history[s].shift();
+      ok++;
+    }
   });
-  if(state.auto) runStrategy();
+  if(ok>0){
+    manageOpenPositions();          // stop-loss / take-profit first
+    if(state.auto && !state.reached) runStrategy();
+    checkTarget();
+  }
   render();
 }
 
+function checkTarget(){
+  if(!state.reached && portfolioValue()>=state.target){
+    state.reached=true; state.auto=false;
+    $('autoToggle').checked=false; $('autoState').textContent='Off';
+    log('🎯 TARGET REACHED — portfolio hit '+fmt(portfolioValue())+'. Auto-Trade stopped.','win');
+  }
+}
+
+const RISK_PCT=0.02;        // 2% rule: risk ~2% of equity per trade
+const STOP_ATR=1.5;         // stop-loss distance = 1.5 x ATR
+const TARGET_ATR=2.5;       // take-profit distance = 2.5 x ATR (reward > risk)
+
 function runStrategy(){
+  const equity=portfolioValue();
   SYMBOLS.forEach(s=>{
-    const h=state.history[s], fast=sma(h,5), slow=sma(h,20);
-    if(fast==null||slow==null) return;
-    const pFast=sma(h.slice(0,-1),5), pSlow=sma(h.slice(0,-1),20);
-    if(pFast==null||pSlow==null) return;
-    const held = state.positions[s];
-    // Golden cross -> buy ; Death cross -> sell
-    if(pFast<=pSlow && fast>slow && !held){
-      const budget = state.cash*0.15;
-      const qty = Math.floor(budget/state.prices[s]);
-      if(qty>0) placeOrder(s,'buy',qty);
-    } else if(pFast>=pSlow && fast<slow && held){
-      placeOrder(s,'sell',held.qty);
+    const h=state.history[s], px=state.prices[s], a=analyze(h);
+    const held=state.positions[s];
+    if(!held && a.score>=3 && a.atr>0){
+      // volatility-adjusted size: risk RISK_PCT of equity over the stop distance
+      const stopDist=STOP_ATR*a.atr;
+      let qty=Math.floor((equity*RISK_PCT)/stopDist);
+      const maxByCash=Math.floor((state.cash*0.95)/px);
+      qty=Math.min(qty,maxByCash);
+      if(qty>0) openTrade(s,qty,px,a.atr);
+    }else if(held && a.score<=-1){
+      closeTrade(s,px,'signal reversal');
     }
   });
 }
 
-function placeOrder(sym,side,qty){
-  const px=state.prices[sym];
-  if(side==='buy'){
-    const cost=px*qty; if(cost>state.cash) return;
-    const cur=state.positions[sym]||{qty:0,avg:0};
-    const newQty=cur.qty+qty;
-    state.positions[sym]={qty:newQty, avg:(cur.avg*cur.qty+cost)/newQty};
-    state.cash-=cost;
-    log(`BUY  ${qty} ${sym} @ ${fmt(px)}  (golden cross)`,'buy');
-  }else{
-    const cur=state.positions[sym]; if(!cur) return;
-    const proceeds=px*Math.min(qty,cur.qty);
-    state.cash+=proceeds;
-    const pl=(px-cur.avg)*Math.min(qty,cur.qty);
-    log(`SELL ${Math.min(qty,cur.qty)} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)}  (death cross)`,'sell');
-    delete state.positions[sym];
+function openTrade(sym,qty,px,a){
+  const cost=px*qty; if(cost>state.cash || qty<=0) return;
+  state.positions[sym]={qty, avg:px, stop:px-STOP_ATR*a, target:px+TARGET_ATR*a};
+  state.cash-=cost;
+  log(`BUY  ${qty} ${sym} @ ${fmt(px)}  (score confirmed · stop ${fmt(px-STOP_ATR*a)})`,'buy');
+}
+
+function closeTrade(sym,px,reason){
+  const cur=state.positions[sym]; if(!cur) return;
+  const proceeds=px*cur.qty, pl=(px-cur.avg)*cur.qty;
+  state.cash+=proceeds;
+  log(`SELL ${cur.qty} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)}  (${reason})`, pl>=0?'sell':'sell');
+  delete state.positions[sym];
+}
+
+function manageOpenPositions(){
+  for(const s of Object.keys(state.positions)){
+    const p=state.positions[s], px=state.prices[s];
+    if(px<=p.stop) closeTrade(s,px,'stop-loss');
+    else if(px>=p.target) closeTrade(s,px,'take-profit');
   }
-  // In live mode we'd POST /v2/orders here; direct browser POST is usually CORS-blocked, so this demo
-  // keeps the book locally and mirrors what a server-side bridge would submit.
 }
 
 function portfolioValue(){
@@ -362,23 +519,35 @@ function render(){
   $('cash').textContent=fmt(state.cash);
   const dpl=pv-state.startEquity;
   $('dpl').innerHTML=`<span class="${dpl>=0?'up':'down'}">${fmt(dpl)} (${pct(state.startEquity?dpl/state.startEquity*100:0)})</span>`;
-  $('posCount').textContent=Object.keys(state.positions).length;
 
-  // watchlist
+  const span=state.target-state.startEquity;
+  const prog=span>0 ? Math.max(0,Math.min(100,((pv-state.startEquity)/span)*100)) : 0;
+  $('goalBar').style.width=prog.toFixed(1)+'%';
+  $('goalText').innerHTML = state.reached
+    ? `<span class="up">Target reached ✓</span>`
+    : `${fmt(pv)} of ${fmt(state.target)} &middot; ${prog.toFixed(0)}%`;
+
+  // honest earnings-pace tracker vs the $1.00 / 5s goal
+  const elapsed=Math.max(1,(Date.now()-state.startTime)/1000);
+  const per5=(dpl/elapsed)*5;
+  $('goalPace').innerHTML = `<span class="${per5>=1?'up':(per5>=0?'muted':'down')}">${fmt(per5)} / 5s</span>`
+    + ` <span class="muted">(${per5>=1?'on/above pace':'below pace'})</span>`;
+
   $('watchBody').innerHTML = SYMBOLS.map(s=>{
-    const h=state.history[s], px=state.prices[s];
-    const fast=sma(h,5), slow=sma(h,20);
+    const h=state.history[s], px=state.prices[s], a=analyze(h);
     const chg = h.length>1 ? (px/h[h.length-2]-1)*100 : 0;
     let sig='—', cls='muted';
-    if(fast!=null&&slow!=null){ if(fast>slow){sig='▲ Bullish';cls='up';} else {sig='▼ Bearish';cls='down';} }
+    if(a.score>=3){sig='▲ Strong buy';cls='up';}
+    else if(a.score>=1){sig='△ Bullish';cls='up';}
+    else if(a.score<=-1){sig='▼ Bearish';cls='down';}
     return `<tr><td><strong>${s}</strong></td><td>${fmt(px)}</td>
       <td class="${chg>=0?'up':'down'}">${pct(chg)}</td>
-      <td>${fast!=null?fast.toFixed(2):'—'}</td>
-      <td>${slow!=null?slow.toFixed(2):'—'}</td>
+      <td>${a.rsi!=null?a.rsi.toFixed(0):'—'}</td>
+      <td class="${a.hist>=0?'up':'down'}">${a.hist!=null?a.hist.toFixed(2):'—'}</td>
+      <td>${a.score>0?'+':''}${a.score}</td>
       <td class="${cls}">${sig}</td></tr>`;
   }).join('');
 
-  // positions
   const keys=Object.keys(state.positions);
   $('posBody').innerHTML = keys.length? keys.map(s=>{
     const p=state.positions[s], px=state.prices[s], mv=p.qty*px, pl=(px-p.avg)*p.qty;
@@ -390,13 +559,13 @@ function render(){
 
 function log(msg,kind='sys'){
   const d=document.createElement('div');
-  const t=new Date().toLocaleTimeString();
   d.className=kind;
-  d.textContent=`[${t}] ${msg}`;
+  d.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;
   $('log').prepend(d);
 }
 
-show('screen-privacy');
+initAuth();
+show('screen-auth');
 </script>
 </body>
 </html>
