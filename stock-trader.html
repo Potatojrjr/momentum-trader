@@ -407,6 +407,12 @@ function analyze(h){
   const dh=donchianHigh(h.slice(0,-1),20);          // breakout reference (excludes current)
   const histRising = m.hist > mPrev.hist;            // momentum accelerating, not just positive
   const trendUp = ef>em && em>es;                    // aligned uptrend across timeframes
+  // ---- CHOP FILTER: only trust an uptrend if it is actually trending, not ranging ----
+  const esPast = ema(h.slice(0,-6),34);             // slow EMA ~6 samples ago
+  const slowRising = esPast!=null && es>esPast;      // the regime line itself is climbing
+  const fanSpread = (ef-es)/px;                      // EMA separation as % of price
+  const trending = fanSpread > 0.0020;               // <0.20% apart = coiled = chop, skip it
+  const strongTrend = trendUp && slowRising && trending;
   let score=0;
   score += ef>em ? 1 : -1;                           // short vs mid trend
   score += em>es ? 1 : -1;                           // mid vs long trend (regime)
@@ -414,8 +420,10 @@ function analyze(h){
   score += histRising ? 1 : -1;                      // MACD momentum acceleration
   score += rc>0 ? 1 : -1;                            // rate of change
   if(dh!=null && px>dh) score+=1;                    // Donchian breakout (Turtle entry)
+  if(slowRising) score+=1;                           // reward a genuinely rising regime
+  if(!trending) score-=2;                            // heavily penalize coiled/choppy tape
   if(r>75 || r<25) score-=1;                         // avoid overextended entries (mean-revert risk)
-  return {score, rsi:r, hist:m.hist, atr:a, trendUp, warmed, px};
+  return {score, rsi:r, hist:m.hist, atr:a, trendUp, strongTrend, warmed, px};
 }
 
 /* ---------- Live market data (Finnhub real-time quotes) ---------- */
@@ -514,14 +522,14 @@ function checkTarget(){
   }
 }
 
-const RISK_PCT=0.02;        // base 2% rule: risk ~2% of equity per trade
-const STOP_ATR=1.5;         // stop-loss distance = 1.5 x ATR
-const TARGET_ATR=2.5;       // take-profit distance = 2.5 x ATR (reward > risk)
-const ENTRY_SCORE=4;        // selective: need a strong, aligned setup before entering
-const MAX_RISK_PCT=0.10;    // cap a single high-conviction trade at 10% of equity at risk
-const TRAIL_ATR=1.2;        // once in profit, trail the stop 1.2 x ATR below the peak
-const ARM_TRAIL_ATR=1.0;    // arm the trailing stop after price runs 1 x ATR in our favor
-const COOLDOWN_MS=12000;    // after exiting a symbol, wait before re-entering (kills whipsaws)
+const RISK_PCT=0.015;       // base 1.5% rule: risk ~1.5% of equity per trade (tighter)
+const STOP_ATR=1.2;         // stop-loss distance = 1.2 x ATR (cut losers faster)
+const TARGET_ATR=2.8;       // take-profit distance = 2.8 x ATR (bigger reward-to-risk)
+const ENTRY_SCORE=5;        // very selective: need a strong, trending, aligned setup
+const MAX_RISK_PCT=0.08;    // cap a single high-conviction trade at 8% of equity at risk
+const TRAIL_ATR=1.0;        // once in profit, trail the stop 1.0 x ATR below the peak (lock gains)
+const ARM_TRAIL_ATR=0.7;    // arm the trailing stop after price runs 0.7 x ATR in our favor
+const COOLDOWN_MS=20000;    // after exiting a symbol, wait longer before re-entering (kills whipsaws)
 
 function runStrategy(){
   const equity=portfolioValue();
@@ -534,8 +542,8 @@ function runStrategy(){
   ranked.forEach(({s,px,a})=>{
     const held=state.positions[s];
     const cooling = state.cooldown[s] && (now - state.cooldown[s] < COOLDOWN_MS);
-    // ENTRY: only with a confirmed uptrend, a strong score, warmed-up data, and not cooling off.
-    if(!held && a.warmed && a.trendUp && a.score>=ENTRY_SCORE && a.atr>0 && !cooling){
+    // ENTRY: only in a genuinely TRENDING (non-choppy) uptrend, strong score, warmed-up, not cooling.
+    if(!held && a.warmed && a.strongTrend && a.score>=ENTRY_SCORE && a.atr>0 && !cooling){
       const conviction=Math.min(a.score,6)/4;            // 4->1.0, 5->1.25, 6->1.5
       const riskPct=Math.min(RISK_PCT*conviction*2, MAX_RISK_PCT);
       const stopDist=STOP_ATR*a.atr;
@@ -544,8 +552,8 @@ function runStrategy(){
       qty=Math.min(qty,maxByCash);
       if(qty>0) openTrade(s,qty,px,a.atr);
     }
-    // EXIT on signal: trend or momentum has rolled over (cut losers / lock the thesis break).
-    else if(held && a.warmed && (!a.trendUp || a.score<=0)){
+    // EXIT on signal: trend lost strength or momentum rolled over (cut losers fast in chop).
+    else if(held && a.warmed && (!a.strongTrend || a.score<=1)){
       closeTrade(s,px,'signal exit');
     }
   });
@@ -615,7 +623,8 @@ function render(){
     const pxTxt = (typeof px==='number') ? fmt(px) : '—';
     let sig='—', cls='muted';
     if(!a.warmed){sig='◷ warming up';cls='muted';}
-    else if(a.trendUp && a.score>=ENTRY_SCORE){sig='▲ Strong buy';cls='up';}
+    else if(a.strongTrend && a.score>=ENTRY_SCORE){sig='▲ Strong buy';cls='up';}
+    else if(a.trendUp && !a.strongTrend){sig='~ choppy (skip)';cls='muted';}
     else if(a.trendUp && a.score>=2){sig='△ Bullish';cls='up';}
     else if(a.score<=0){sig='▼ Bearish';cls='down';}
     return `<tr><td><strong>${s}</strong></td><td>${pxTxt}</td>
