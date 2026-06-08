@@ -244,7 +244,9 @@ const SYMBOLS = ['AAPL','MSFT','NVDA','TSLA','AMZN','GOOGL'];
 const SEED_PRICE = {AAPL:212,MSFT:438,NVDA:121,TSLA:178,AMZN:198,GOOGL:176};
 const STORE_KEY = 'mt_account_v2';
 const FINNHUB_KEY = 'd8hqgjhr01qrn5edkmlgd8hqgjhr01qrn5edkmm0'; // free real-time quotes
-const POLL_MS = 8000; // 6 symbols / 8s = 45 calls/min, under Finnhub's free 60/min limit
+const WS_URL = 'wss://ws.finnhub.io?token=' + FINNHUB_KEY; // real-time trade stream (push, sub-second)
+const ENGINE_MS = 1000;  // re-evaluate strategy + redraw once per second on freshest prices
+const POLL_MS = 8000;    // REST fallback only, if the WebSocket can't connect
 
 /* simple non-cryptographic hash — demo-grade only */
 function hash(str){
@@ -256,7 +258,8 @@ function saveAccount(a){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(a));
 
 let state = {
   user:'', cash:0, startEquity:0, target:0,
-  positions:{}, prices:{}, history:{}, auto:false, reached:false, timer:null, startTime:0,
+  positions:{}, prices:{}, history:{}, auto:false, reached:false,
+  timer:null, engineTimer:null, ws:null, startTime:0,
 };
 
 /* ---------- Screen 0: auth (register once, then login) ---------- */
@@ -345,6 +348,8 @@ $('autoToggle').onchange = e => {
 };
 $('logoutBtn').onclick = () => {
   if(state.timer) clearInterval(state.timer);
+  if(state.engineTimer) clearInterval(state.engineTimer);
+  if(state.ws){ try{ state.ws.close(); }catch(e){} state.ws=null; }
   state.auto=false;
   initAuth(); show('screen-auth');
 };
@@ -410,6 +415,7 @@ async function fetchQuote(sym){
 
 async function startLive(){
   $('modePill').className='pill sim'; $('modePill').textContent='Connecting…';
+  // 1) REST seed: one batch to get starting prices and warm up the indicators immediately.
   let ok=0;
   try{
     const res=await Promise.allSettled(SYMBOLS.map(fetchQuote));
@@ -424,34 +430,65 @@ async function startLive(){
   }catch(e){}
   if(ok===0){
     $('modePill').className='pill sim'; $('modePill').textContent='No live data';
-    log('Could not reach Finnhub. Live prices need internet access — open this file in your own browser or host it (GitHub Pages). It also will not load inside the in-app preview, which blocks outside connections.','sys');
+    log('Could not reach Finnhub. Live prices need internet access — open this page in your own browser or via GitHub Pages. It will not load inside the in-app preview, which blocks outside connections.','sys');
     render();
     return;
   }
-  $('modePill').className='pill live'; $('modePill').textContent='Live · Finnhub';
-  log('Connected to real-time prices via Finnhub ('+ok+'/'+SYMBOLS.length+' symbols). Indicators warm up as live ticks arrive. Note: US prices only move during market hours (9:30am–4:00pm ET).','sys');
+  log('Seeded '+ok+'/'+SYMBOLS.length+' symbols. Opening real-time trade stream…','sys');
   render();
-  if(state.timer) clearInterval(state.timer);
-  state.timer=setInterval(liveTick,POLL_MS);
+  // 2) Engine loop: every second, sample latest prices into history and run the strategy.
+  if(state.engineTimer) clearInterval(state.engineTimer);
+  state.engineTimer=setInterval(engineStep, ENGINE_MS);
+  // 3) WebSocket: push real-time trades (sub-second) for the freshest possible prices.
+  connectWS();
 }
 
-async function liveTick(){
-  const res=await Promise.allSettled(SYMBOLS.map(fetchQuote));
-  let ok=0;
-  res.forEach((p,i)=>{
-    const s=SYMBOLS[i];
-    if(p.status==='fulfilled'){
-      state.prices[s]=p.value;
-      (state.history[s]=state.history[s]||[]).push(p.value);
-      if(state.history[s].length>200) state.history[s].shift();
-      ok++;
-    }
-  });
-  if(ok>0){
-    manageOpenPositions();          // stop-loss / take-profit first
-    if(state.auto && !state.reached) runStrategy();
-    checkTarget();
+function connectWS(){
+  try{
+    const ws=new WebSocket(WS_URL);
+    state.ws=ws;
+    ws.onopen=()=>{
+      SYMBOLS.forEach(s=>ws.send(JSON.stringify({type:'subscribe',symbol:s})));
+      if(state.timer){ clearInterval(state.timer); state.timer=null; } // stop REST fallback if it was running
+      $('modePill').className='pill live'; $('modePill').textContent='Live · Finnhub (real-time)';
+      log('Real-time stream connected. Prices update within ~1s of each trade. Note: US trades only flow during market hours (9:30am–4:00pm ET).','sys');
+    };
+    ws.onmessage=(ev)=>{
+      let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+      if(m.type==='trade' && Array.isArray(m.data)){
+        // keep only the most recent price per symbol from this batch
+        m.data.forEach(t=>{ if(typeof t.p==='number' && t.p>0) state.prices[t.s]=t.p; });
+      }
+    };
+    ws.onclose=()=>{ if(!state.reached) startRestFallback(); };
+    ws.onerror=()=>{ try{ ws.close(); }catch(e){} };
+  }catch(e){
+    startRestFallback();
   }
+}
+
+// If the WebSocket is blocked/closed, fall back to REST polling so the app still updates.
+function startRestFallback(){
+  if(state.timer) return;
+  $('modePill').className='pill live'; $('modePill').textContent='Live · Finnhub (polling)';
+  log('Real-time stream unavailable — falling back to REST polling every '+(POLL_MS/1000)+'s.','sys');
+  state.timer=setInterval(async()=>{
+    const res=await Promise.allSettled(SYMBOLS.map(fetchQuote));
+    res.forEach((p,i)=>{ if(p.status==='fulfilled') state.prices[SYMBOLS[i]]=p.value; });
+  }, POLL_MS);
+}
+
+// Runs once per second: record the freshest prices, then react.
+function engineStep(){
+  SYMBOLS.forEach(s=>{
+    const px=state.prices[s];
+    if(typeof px!=='number') return;
+    (state.history[s]=state.history[s]||[]).push(px);
+    if(state.history[s].length>240) state.history[s].shift();
+  });
+  manageOpenPositions();                       // stop-loss / take-profit first
+  if(state.auto && !state.reached) runStrategy();
+  checkTarget();
   render();
 }
 
@@ -463,20 +500,28 @@ function checkTarget(){
   }
 }
 
-const RISK_PCT=0.02;        // 2% rule: risk ~2% of equity per trade
+const RISK_PCT=0.02;        // base 2% rule: risk ~2% of equity per trade
 const STOP_ATR=1.5;         // stop-loss distance = 1.5 x ATR
 const TARGET_ATR=2.5;       // take-profit distance = 2.5 x ATR (reward > risk)
+const ENTRY_SCORE=2;        // act once at least 2 signals confirm (more opportunities)
+const MAX_RISK_PCT=0.10;    // cap a single high-conviction trade at 10% of equity at risk
 
 function runStrategy(){
   const equity=portfolioValue();
-  SYMBOLS.forEach(s=>{
-    const h=state.history[s], px=state.prices[s], a=analyze(h);
+  // Find the freshest opportunities and commit the most capital to the strongest ones.
+  const ranked=SYMBOLS
+    .map(s=>({s, px:state.prices[s], a:analyze(state.history[s])}))
+    .filter(o=>typeof o.px==='number')
+    .sort((x,y)=>y.a.score-x.a.score); // strongest signal first
+  ranked.forEach(({s,px,a})=>{
     const held=state.positions[s];
-    if(!held && a.score>=3 && a.atr>0){
-      // volatility-adjusted size: risk RISK_PCT of equity over the stop distance
+    if(!held && a.score>=ENTRY_SCORE && a.atr>0){
+      // conviction-weighted: scale risk with how many signals agree (score 2..5 -> ~2%..10%)
+      const conviction=Math.min(a.score,5)/3;            // 2->0.67, 3->1.0, 4->1.33, 5->1.67
+      const riskPct=Math.min(RISK_PCT*conviction*2, MAX_RISK_PCT);
       const stopDist=STOP_ATR*a.atr;
-      let qty=Math.floor((equity*RISK_PCT)/stopDist);
-      const maxByCash=Math.floor((state.cash*0.95)/px);
+      let qty=Math.floor((equity*riskPct)/stopDist);
+      const maxByCash=Math.floor((state.cash*0.95)/px); // never spend more cash than we have
       qty=Math.min(qty,maxByCash);
       if(qty>0) openTrade(s,qty,px,a.atr);
     }else if(held && a.score<=-1){
