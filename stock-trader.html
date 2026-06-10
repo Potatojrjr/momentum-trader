@@ -260,6 +260,11 @@ let state = {
   user:'', cash:0, startEquity:0, target:0,
   positions:{}, prices:{}, history:{}, cooldown:{}, auto:false, reached:false,
   timer:null, engineTimer:null, ws:null, startTime:0,
+  // --- self-improvement + safety state ---
+  perf:{ trend:[], mr:[] },   // rolling P/L outcomes per strategy (for adaptive sizing)
+  symPerf:{},                 // rolling P/L outcomes per symbol (to bench losers)
+  equityPeak:0,               // high-water mark of portfolio value
+  halted:false,               // circuit breaker: true = stop opening new trades
 };
 
 /* ---------- Screen 0: auth (register once, then login) ---------- */
@@ -316,6 +321,7 @@ $('setupBtn').onclick = () => {
   if(!(target>cash)){ $('setupErr').textContent='Your target must be higher than your starting cash.'; return; }
   state.cash=cash; state.startEquity=cash; state.target=target;
   state.positions={}; state.reached=false; state.auto=false; state.startTime=Date.now();
+  state.perf={trend:[],mr:[]}; state.symPerf={}; state.equityPeak=cash; state.halted=false;  // reset learning + safety
   $('autoToggle').checked=false; $('autoState').textContent='Off';
   enterDash();
 };
@@ -513,6 +519,7 @@ function engineStep(){
     if(state.history[s].length>240) state.history[s].shift();
   });
   manageOpenPositions();                       // stop-loss / take-profit first
+  updateRisk();                                // SAFETY: update drawdown / circuit breaker
   if(state.auto && !state.reached) runStrategy();
   checkTarget();
   render();
@@ -536,7 +543,48 @@ const ARM_TRAIL_ATR=0.7;    // arm the trailing stop after price runs 0.7 x ATR 
 const COOLDOWN_MS=20000;    // after exiting a symbol, wait longer before re-entering (kills whipsaws)
 const MR_STOP_ATR=1.0;      // mean-reversion: tight stop 1.0 x ATR below the oversold entry
 
+/* ---------- Self-improvement (adaptive) + safety (circuit breaker) ---------- */
+const PERF_WINDOW=12;       // judge each strategy on its last 12 trades
+const SYM_WINDOW=6;         // judge each symbol on its last 6 trades
+const MAX_DRAWDOWN=0.06;    // SAFETY: if equity falls 6% below its peak, stop opening trades
+const REARM_DRAWDOWN=0.03;  // resume trading once we've recovered back within 3% of the peak
+
+// Learn which strategy is working: scale size up when it's winning, down when it's losing.
+function perfMult(type){
+  const arr=state.perf[type]||[];
+  if(arr.length<4) return 1;                         // not enough data yet — trade normally
+  const wins=arr.filter(pl=>pl>=0).length, wr=wins/arr.length;
+  const net=arr.reduce((a,b)=>a+b,0);
+  if(wr<0.35 || net<0) return 0.5;                   // recently poor -> half size (protect capital)
+  if(wr>0.60 && net>0) return 1.4;                   // recently strong -> press the edge (capped)
+  return 1;
+}
+// Bench a symbol that's been bleeding lately so we stop feeding it.
+function symBlocked(sym){
+  const arr=state.symPerf[sym]||[];
+  if(arr.length<SYM_WINDOW) return false;
+  const net=arr.reduce((a,b)=>a+b,0);
+  const wins=arr.filter(pl=>pl>=0).length;
+  return net<0 && wins/arr.length<0.34;             // net loser AND low hit-rate -> sit it out
+}
+// SAFETY: track the equity high-water mark and trip/reset the circuit breaker.
+function updateRisk(){
+  const pv=portfolioValue();
+  if(pv>state.equityPeak) state.equityPeak=pv;
+  if(state.equityPeak<=0) return;
+  const dd=(state.equityPeak-pv)/state.equityPeak;
+  if(!state.halted && dd>=MAX_DRAWDOWN){
+    state.halted=true;
+    for(const s of Object.keys(state.positions)) closeTrade(s, state.prices[s], 'risk halt (drawdown)');
+    log(`🛑 SAFETY HALT — equity fell ${(dd*100).toFixed(1)}% from its peak. Flattened all positions; no new trades until it recovers.`,'sys');
+  } else if(state.halted && dd<=REARM_DRAWDOWN){
+    state.halted=false;
+    log(`✅ Risk recovered (drawdown back to ${(dd*100).toFixed(1)}%). Trading re-enabled.`,'sys');
+  }
+}
+
 function runStrategy(){
+  if(state.halted) return;   // circuit breaker active — preserve capital, take no new trades
   const equity=portfolioValue();
   const now=Date.now();
   // Rank tradeable setups; commit the most capital to the strongest, trend-aligned ones.
@@ -547,11 +595,11 @@ function runStrategy(){
   ranked.forEach(({s,px,a})=>{
     const held=state.positions[s];
     const cooling = state.cooldown[s] && (now - state.cooldown[s] < COOLDOWN_MS);
-    if(!held && a.warmed && a.atr>0 && !cooling){
+    if(!held && a.warmed && a.atr>0 && !cooling && !symBlocked(s)){
       // STRATEGY 1 — TREND: ride a confirmed, trending uptrend with a strong score.
       if(a.strongTrend && a.score>=ENTRY_SCORE){
         const conviction=Math.min(a.score,6)/4;          // 5->1.25, 6->1.5
-        const riskPct=Math.min(RISK_PCT*conviction*2, MAX_RISK_PCT);
+        const riskPct=Math.min(RISK_PCT*conviction*2*perfMult('trend'), MAX_RISK_PCT);  // adaptive
         let qty=Math.floor((equity*riskPct)/(STOP_ATR*a.atr));
         qty=Math.min(qty, Math.floor((state.cash*0.95)/px));
         if(qty>0) openTrade(s,qty,px,a.atr,{type:'trend'});
@@ -561,7 +609,8 @@ function runStrategy(){
         const stop = px - MR_STOP_ATR*a.atr;             // tight stop below the band
         const target = a.mid;                            // exit when price reverts to range center
         if(target>px){
-          let qty=Math.floor((equity*RISK_PCT)/(MR_STOP_ATR*a.atr));
+          const riskPct=Math.min(RISK_PCT*perfMult('mr'), MAX_RISK_PCT);                // adaptive
+          let qty=Math.floor((equity*riskPct)/(MR_STOP_ATR*a.atr));
           qty=Math.min(qty, Math.floor((state.cash*0.95)/px));
           if(qty>0) openTrade(s,qty,px,a.atr,{type:'mr', stop, target});
         }
@@ -597,6 +646,10 @@ function closeTrade(sym,px,reason){
   const proceeds=px*cur.qty, pl=(px-cur.avg)*cur.qty;
   state.cash+=proceeds;
   state.cooldown[sym]=Date.now();                   // start cooldown to avoid instant re-entry
+  // --- record the outcome so the engine learns from it (adaptive sizing / benching) ---
+  const t=cur.type||'trend';
+  (state.perf[t]=state.perf[t]||[]).push(pl);   if(state.perf[t].length>PERF_WINDOW) state.perf[t].shift();
+  (state.symPerf[sym]=state.symPerf[sym]||[]).push(pl); if(state.symPerf[sym].length>SYM_WINDOW) state.symPerf[sym].shift();
   log(`SELL ${cur.qty} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)}  (${reason})`, pl>=0?'sell':'sell');
   delete state.positions[sym];
 }
