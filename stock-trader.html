@@ -223,7 +223,7 @@
         <span class="badge">supervisor reallocates &amp; re-tunes every 30s</span>
       </div>
       <table style="margin-top:12px">
-        <thead><tr><th>Agent</th><th>Capital</th><th>Positions</th><th>Realized P/L</th><th>Trades · Win%</th><th>Current tuning</th><th>Status</th></tr></thead>
+        <thead><tr><th>Agent</th><th>Capital</th><th>Made</th><th>Lost</th><th>Net P/L</th><th>Trades · Win%</th><th>Current tuning</th><th>Status</th></tr></thead>
         <tbody id="agentBody"></tbody>
       </table>
     </div>
@@ -338,7 +338,8 @@ function saveProfile(){
       feed:state.feed, replayLoops:state.replayLoops, auto:state.auto,
       agents:state.agents.map(a=>({ id:a.id, name:a.name, strat:a.strat, icon:a.icon,
         cash:a.cash, positions:a.positions, cooldown:a.cooldown, perf:a.perf,
-        trades:a.trades, wins:a.wins, realized:a.realized, params:a.params, status:a.status })) };
+        trades:a.trades, wins:a.wins, realized:a.realized, grossWin:a.grossWin||0, grossLoss:a.grossLoss||0,
+        params:a.params, status:a.status })) };
     localStorage.setItem(profileKey(state.user), JSON.stringify(snap));
   }catch(e){}
 }
@@ -800,13 +801,13 @@ function buildAgents(totalCash){
   const each=totalCash/3;
   return [
     { id:'trend', name:'Trend Rider',   strat:'trend',    icon:'▲',
-      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0,
+      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
       params:{ gate:5,  risk:0.015 }, status:'active' },
     { id:'mr',    name:'Dip Buyer',      strat:'mr',       icon:'⤴',
-      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0,
+      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
       params:{ gate:35, risk:0.015 }, status:'active' },
     { id:'brk',   name:'Breakout Hunter',strat:'breakout', icon:'🚀',
-      cash:totalCash-2*each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0,
+      cash:totalCash-2*each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
       params:{ gate:2,  risk:0.015 }, status:'active' },
   ];
 }
@@ -831,7 +832,8 @@ function closeTradeA(ag,sym,px,reason){
   const pl=(px-cur.avg)*cur.qty;
   ag.cash+=px*cur.qty; ag.cooldown[sym]=Date.now();
   ag.perf.push(pl); if(ag.perf.length>50) ag.perf.shift();
-  ag.trades++; if(pl>=0) ag.wins++; ag.realized+=pl;
+  ag.trades++; ag.realized+=pl;
+  if(pl>=0){ ag.wins++; ag.grossWin=(ag.grossWin||0)+pl; } else { ag.grossLoss=(ag.grossLoss||0)+pl; }
   log(`${ag.name}: SELL ${cur.qty} ${sym} @ ${fmt(px)}  P/L ${fmt(pl)} (${reason})`,'sell');
   delete ag.positions[sym];
 }
@@ -940,6 +942,8 @@ function render(){
   $('pv').textContent=fmt(pv);
   const totalCash=state.agents.reduce((x,ag)=>x+ag.cash,0);
   $('cash').textContent=fmt(totalCash);
+  // In Mix mode, show which real June day is currently playing (full day, in order).
+  if(state.feed==='mix' && state.mixDay){ $('modePill').className='pill sim'; $('modePill').textContent='Mix · playing '+state.mixDay+' (real, in order)'; }
   const dpl=pv-state.startEquity;
   $('dpl').innerHTML=`<span class="${dpl>=0?'up':'down'}">${fmt(dpl)} (${pct(state.startEquity?dpl/state.startEquity*100:0)})</span>`;
 
@@ -976,15 +980,23 @@ function render(){
   }).join('');
 
   // ---- Agents panel: each agent's book, performance, current tuning, status ----
+  // which agent is doing worst (for the "needs improvement" flag)
+  const worstNet = state.agents.length ? Math.min(...state.agents.map(a=>a.realized)) : 0;
   if($('agentBody')) $('agentBody').innerHTML = state.agents.map(ag=>{
     const eq=agentEquity(ag), st=agentStats(ag);
     const nPos=Object.keys(ag.positions).length;
     const wr = st.wr!=null ? (st.wr*100).toFixed(0)+'%' : '—';
+    const made=ag.grossWin||0, lost=ag.grossLoss||0;
     const gateTxt = ag.strat==='mr' ? ('RSI≤'+ag.params.gate) : ('score≥'+ag.params.gate);
-    const stChip = state.halted ? '<span class="down">paused</span>' : '<span class="up">active</span>';
-    return `<tr><td><strong>${ag.icon} ${ag.name}</strong><br><span class="muted" style="font-size:11px">${ag.strat}</span></td>
-      <td>${fmt(eq)}</td><td>${nPos}</td>
-      <td class="${ag.realized>=0?'up':'down'}">${fmt(ag.realized)}</td>
+    // flag the weakest agent (lowest net, actually losing, with a few trades) as needing improvement
+    const needsWork = state.agents.length>1 && ag.realized===worstNet && ag.realized<0 && ag.trades>=3;
+    const stChip = state.halted ? '<span class="down">paused</span>'
+      : needsWork ? '<span class="down">⚠ needs work</span>' : '<span class="up">active</span>';
+    return `<tr><td><strong>${ag.icon} ${ag.name}</strong><br><span class="muted" style="font-size:11px">${ag.strat} · ${nPos} open</span></td>
+      <td>${fmt(eq)}</td>
+      <td class="up">${fmt(made)}</td>
+      <td class="down">${fmt(lost)}</td>
+      <td class="${ag.realized>=0?'up':'down'}"><strong>${fmt(ag.realized)}</strong></td>
       <td>${ag.trades} · ${wr}</td>
       <td class="muted" style="font-size:12px">${gateTxt} · risk ${(ag.params.risk*100).toFixed(1)}%</td>
       <td>${stChip}</td></tr>`;
