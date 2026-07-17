@@ -334,7 +334,7 @@ function saveProfile(){
   try{
     const snap={ v:1, savedAt:Date.now(),
       startEquity:state.startEquity, target:state.target, reached:state.reached, startTime:state.startTime,
-      equityPeak:state.equityPeak, halted:state.halted, haltTime:state.haltTime,
+      equityPeak:state.equityPeak, halted:state.halted, haltTime:state.haltTime, simClock:state.simClock,
       feed:state.feed, replayLoops:state.replayLoops, auto:state.auto,
       agents:state.agents.map(a=>({ id:a.id, name:a.name, strat:a.strat, icon:a.icon,
         cash:a.cash, positions:a.positions, cooldown:a.cooldown, perf:a.perf,
@@ -348,7 +348,15 @@ function restoreProfile(p){
   state.startTime=p.startTime||Date.now(); state.equityPeak=p.equityPeak||p.startEquity;
   state.halted=!!p.halted; state.haltTime=p.haltTime||0;
   state.feed=p.feed||'live'; state.replayLoops=p.replayLoops||0; state.auto=!!p.auto;
-  state.agents=p.agents.map(a=>({ ...a, positions:a.positions||{}, cooldown:a.cooldown||{}, perf:a.perf||[] }));
+  state.simClock=p.simClock||Date.now();
+  state.agents=p.agents.map(a=>({ ...a, positions:a.positions||{}, cooldown:a.cooldown||{}, perf:a.perf||[], grossWin:a.grossWin||0, grossLoss:a.grossLoss||0 }));
+  // migrate older 3-agent profiles: add the Long-Term Holder, funded by a small even skim
+  if(!state.agents.some(a=>a.id==='lt')){
+    const total=state.agents.reduce((n,a)=>n+a.cash,0);
+    const share=total/(state.agents.length+1), factor=(total-share)/total;
+    state.agents.forEach(a=>a.cash*=factor);
+    state.agents.push(makeLTAgent(share));
+  }
   state.positions={}; state.prices={}; state.history={};
   state.cash=state.agents.reduce((n,a)=>n+a.cash,0);
   supervisorLast=Date.now();
@@ -368,6 +376,7 @@ let state = {
   replayIdx:0,                // pointer into the current recorded session (advances each tick, loops)
   replayLoops:0,              // how many sessions have been replayed (learning cycles)
   mixDay:null,                // which real June day is currently playing in Mix mode
+  simClock:0,                 // simulated market clock (ms) for replay/mix, drives 24h hold timing
 };
 
 /* ---------- Screen 0: auth (register once, then login) ---------- */
@@ -433,7 +442,7 @@ $('setupBtn').onclick = () => {
   state.cash=cash; state.startEquity=cash; state.target=target;
   state.positions={}; state.reached=false; state.auto=false; state.startTime=Date.now();
   state.agents=buildAgents(cash); state.equityPeak=cash; state.halted=false; state.haltTime=0;  // build desk + reset safety
-  state.feed='live'; state.replayLoops=0;
+  state.feed='live'; state.replayLoops=0; state.simClock=Date.now();
   supervisorLast=Date.now();
   $('autoToggle').checked=false; $('autoState').textContent='Off';
   saveProfile();                       // persist the freshly-funded account
@@ -469,7 +478,7 @@ function enterDash(restored){
     log('Desk memory loaded — '+totalTrades+' past trades and each agent’s learned tuning are back in place. It picks up learning from here.','sys');
   }else{
     log('Account funded with '+fmt(state.cash)+'. Target: '+fmt(state.target)+'.','sys');
-    log('Trading desk online: 3 agents (Trend Rider · Dip Buyer · Breakout Hunter), each with '+fmt(state.cash/3)+'. Supervisor reallocates & re-tunes every 30s. Safety halt at 6% drawdown.','sys');
+    log('Trading desk online: 4 agents (Trend Rider · Dip Buyer · Breakout Hunter · Long-Term Holder), each with '+fmt(state.cash/4)+'. The Long-Term Holder buys and holds 24h+; the others trade intraday. Supervisor reallocates & re-tunes every 30s. Safety halt at 6% drawdown.','sys');
   }
   render();
   startFeed();
@@ -702,14 +711,17 @@ function startRestFallback(){
 // REPLAY: advance one bar of the real June 9 tape into state.prices (no lookahead).
 function feedReplay(){
   const i = state.replayIdx % REPLAY_LEN;
+  const prev = {...state.prices};
   SYMBOLS.forEach(s=>{ state.prices[s] = REPLAY[s][i]; });
+  state.simClock += 5*60000;                 // each June-9 bar = 5 market-minutes
+  if(i===0 && state.replayLoops>0) adjustLTForGap(prev);   // neutralize loop gap for long-term holds
   state.replayIdx++;
   if(i === REPLAY_LEN-1){
-    // End of the session: close every agent's book at the June-9 close (realize the day's P/L),
-    // so the next pass starts flat and re-trades — otherwise positions get stuck on a repeating tape.
-    state.agents.forEach(ag=>{ for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
+    // End of the session: close INTRADAY books at the June-9 close (long-term holds carry over),
+    // so the next pass starts flat and re-trades — otherwise intraday positions get stuck on a loop.
+    state.agents.forEach(ag=>{ if(ag.strat==='longterm') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
     state.replayLoops++;
-    log(`↻ June 9 replay — pass ${state.replayLoops} complete. Books flattened; desk re-trades the day and keeps learning.`,'sys');
+    log(`↻ June 9 replay — pass ${state.replayLoops} complete. Intraday books flat; long-term holds carry across.`,'sys');
   }
 }
 
@@ -726,16 +738,19 @@ function feedMix(){
   if(!mixSource) pickMixDay();
   const len=mixSource.AAPL.length;
   const i=state.replayIdx;
+  const prev={...state.prices};
   SYMBOLS.forEach(s=>{ state.prices[s]=mixSource[s][Math.min(i,len-1)]; });
+  state.simClock += 30*60000;                // each mix bar = 30 market-minutes
+  if(i===0 && state.replayLoops>0) adjustLTForGap(prev);   // neutralize day-switch gap for long-term holds
   state.replayIdx++;
   if(state.replayIdx>=len){
-    // End of this random day — CLOSE all books at the day's real close, then jump to another
-    // random June day. Flattening avoids taking the artificial overnight gap between two
-    // unrelated days as profit/loss; each day is a clean, independent real session.
-    state.agents.forEach(ag=>{ for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
+    // End of this random day — CLOSE INTRADAY books at the day's real close (long-term holds carry
+    // over across days). Flattening intraday avoids taking the artificial gap between two unrelated
+    // days as profit/loss; the long-term agent's gap is neutralized by adjustLTForGap instead.
+    state.agents.forEach(ag=>{ if(ag.strat==='longterm') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
     state.replayIdx=0; state.replayLoops++;
-    const prev=state.mixDay, next=pickMixDay();
-    log(`↻ Mix pass ${state.replayLoops}: finished ${prev} → now a random June day (${next}). Books flat; desk keeps learning across the month.`,'sys');
+    const prev2=state.mixDay, next=pickMixDay();
+    log(`↻ Mix pass ${state.replayLoops}: finished ${prev2} → now a random June day (${next}). Intraday books flat; long-term holds carry across.`,'sys');
   }
 }
 
@@ -778,6 +793,28 @@ const TRAIL_ATR=1.0;        // once in profit, trail the stop 1.0 x ATR below th
 const ARM_TRAIL_ATR=0.7;    // arm the trailing stop after price runs 0.7 x ATR in our favor
 const COOLDOWN_MS=20000;    // after exiting a symbol, wait longer before re-entering (kills whipsaws)
 const MR_STOP_ATR=1.0;      // mean-reversion: tight stop 1.0 x ATR below the oversold entry
+// ---- Long-Term (swing) agent: buy and HOLD for 24h+ ----
+const LT_STOP_ATR=3.0;      // wider stop — swing trades need room to breathe
+const LT_TARGET_ATR=6.0;    // bigger profit target for a multi-day hold
+const LT_TRAIL_ATR=2.0;     // trailing stop (armed only after the minimum hold)
+const LT_MIN_HOLD_H=24;     // will NOT sell (except a protective stop) until held 24 market-hours
+const LT_MAX_HOLD_H=120;    // force an exit after ~5 market-days so it doesn't hold forever
+
+/* Market clock: real time when Live; a simulated clock that advances by each bar's
+   length when replaying/mixing, so "24 hours held" is meaningful in every mode. */
+function marketNow(){ return state.feed==='live' ? Date.now() : state.simClock; }
+function heldHours(p){ return p.entryTime!=null ? (marketNow()-p.entryTime)/3600000 : 0; }
+// When a new session starts (replay loop / mix day switch), shift a held long-term
+// position's cost & stops by the price gap, so the artificial overnight gap between
+// sessions is NOT counted as profit/loss — the swing trade tracks real intraday moves only.
+function adjustLTForGap(prev){
+  state.agents.forEach(ag=>{ if(ag.strat!=='longterm') return;
+    for(const s of Object.keys(ag.positions)){
+      const p=ag.positions[s], now=state.prices[s], was=prev[s];
+      if(typeof now==='number' && typeof was==='number'){ const g=now-was; p.avg+=g; p.stop+=g; p.target+=g; p.peak+=g; }
+    }
+  });
+}
 
 /* ---------- Self-improvement (adaptive) + safety (circuit breaker) ---------- */
 const PERF_WINDOW=12;       // judge each strategy on its last 12 trades
@@ -796,9 +833,15 @@ const SUPERVISOR_MS=30000;   // supervisor reviews the desk every 30s
 const AGENT_WINDOW=10;       // judge each agent on its last 10 closed trades
 let supervisorLast=0;
 
-// Build the three-agent desk, splitting the starting cash evenly.
+// A single Long-Term (swing) agent — buys and HOLDS for 24h+ before exiting.
+function makeLTAgent(cash){
+  return { id:'lt', name:'Long-Term Holder', strat:'longterm', icon:'🕰️',
+    cash:cash, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
+    params:{ gate:4, risk:0.02 }, status:'active' };
+}
+// Build the four-agent desk, splitting the starting cash evenly.
 function buildAgents(totalCash){
-  const each=totalCash/3;
+  const each=totalCash/4;
   return [
     { id:'trend', name:'Trend Rider',   strat:'trend',    icon:'▲',
       cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
@@ -807,8 +850,9 @@ function buildAgents(totalCash){
       cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
       params:{ gate:35, risk:0.015 }, status:'active' },
     { id:'brk',   name:'Breakout Hunter',strat:'breakout', icon:'🚀',
-      cash:totalCash-2*each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
+      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
       params:{ gate:2,  risk:0.015 }, status:'active' },
+    makeLTAgent(totalCash-3*each),
   ];
 }
 
@@ -823,9 +867,10 @@ function openTradeA(ag,sym,qty,px,atr,opts){
   const cost=px*qty; if(cost>ag.cash || qty<=0) return;
   const stop = opts.stop!=null ? opts.stop : px-STOP_ATR*atr;
   const target = opts.target!=null ? opts.target : px+TARGET_ATR*atr;
-  ag.positions[sym]={qty, avg:px, atr:atr, peak:px, stop, target, type:ag.strat};
+  ag.positions[sym]={qty, avg:px, atr:atr, peak:px, stop, target, type:ag.strat, entryTime:marketNow()};
   ag.cash-=cost;
-  log(`${ag.name}: BUY ${qty} ${sym} @ ${fmt(px)} (stop ${fmt(stop)} · tgt ${fmt(target)})`,'buy');
+  const extra = ag.strat==='longterm' ? ' — long-term hold (24h+ min)' : '';
+  log(`${ag.name}: BUY ${qty} ${sym} @ ${fmt(px)} (stop ${fmt(stop)} · tgt ${fmt(target)})${extra}`,'buy');
 }
 function closeTradeA(ag,sym,px,reason){
   const cur=ag.positions[sym]; if(!cur) return;
@@ -843,6 +888,18 @@ function manageAgent(ag){
     const p=ag.positions[s], px=state.prices[s];
     if(typeof px!=='number') continue;
     if(px>p.peak) p.peak=px;
+    // ---- LONG-TERM: hold 24h+ (except a protective stop), then take profit / trail / max-hold exit ----
+    if(ag.strat==='longterm'){
+      const h=heldHours(p);
+      if(px<=p.stop){ closeTradeA(ag,s,px, p.stop>p.avg?`trailing-stop (held ${h.toFixed(0)}h)`:`stop-loss (held ${h.toFixed(0)}h)`); continue; }
+      if(h>=LT_MIN_HOLD_H){                       // only after the 24h minimum hold
+        if(p.peak >= p.avg + p.atr){ const trail=p.peak-LT_TRAIL_ATR*p.atr; if(trail>p.stop) p.stop=trail; }
+        if(px>=p.target) closeTradeA(ag,s,px,`take-profit (held ${h.toFixed(0)}h)`);
+        else if(h>=LT_MAX_HOLD_H) closeTradeA(ag,s,px,`max hold reached (${h.toFixed(0)}h)`);
+      }
+      continue;
+    }
+    // ---- INTRADAY agents ----
     if(p.type!=='mr' && p.peak >= p.avg + ARM_TRAIL_ATR*p.atr){   // trailing (trend & breakout)
       const trail=p.peak-TRAIL_ATR*p.atr; if(trail>p.stop) p.stop=trail;
     }
@@ -865,8 +922,10 @@ function runAgent(ag){
       if(ag.strat==='trend'    && a.strongTrend && a.score>=ag.params.gate){ entry=true; }
       else if(ag.strat==='mr'  && a.mrBuy && a.rsi<=ag.params.gate && a.mid>px){ entry=true; opts={stop:px-MR_STOP_ATR*a.atr, target:a.mid}; }
       else if(ag.strat==='breakout' && a.breakout && a.score>=ag.params.gate){ entry=true; }
+      // LONG-TERM: buy a confirmed uptrend to HOLD; wide stop + big target, min 24h hold.
+      else if(ag.strat==='longterm' && a.strongTrend && a.score>=ag.params.gate){ entry=true; opts={stop:px-LT_STOP_ATR*a.atr, target:px+LT_TARGET_ATR*a.atr}; }
       if(entry){
-        const stopDist=(ag.strat==='mr'?MR_STOP_ATR:STOP_ATR)*a.atr;
+        const stopDist=(ag.strat==='mr'?MR_STOP_ATR : ag.strat==='longterm'?LT_STOP_ATR : STOP_ATR)*a.atr;
         let qty=Math.floor((eq*ag.params.risk)/stopDist);
         qty=Math.min(qty, Math.floor((ag.cash*0.95)/px));
         if(qty>0) openTradeA(ag,s,qty,px,a.atr,opts);
@@ -875,6 +934,7 @@ function runAgent(ag){
       if(ag.strat==='trend'    && (!a.strongTrend || a.score<=1)) closeTradeA(ag,s,px,'signal exit');
       else if(ag.strat==='mr'  && a.rsi!=null && a.rsi>=55)       closeTradeA(ag,s,px,'mean reverted');
       else if(ag.strat==='breakout' && a.score<=0)               closeTradeA(ag,s,px,'breakout faded');
+      // long-term exits are time-gated and handled in manageAgent (not here)
     }
   });
 }
@@ -1006,7 +1066,8 @@ function render(){
   const rows=[];
   state.agents.forEach(ag=>{ for(const s of Object.keys(ag.positions)){
     const p=ag.positions[s], px=state.prices[s], mv=p.qty*px, pl=(px-p.avg)*p.qty;
-    rows.push(`<tr><td class="muted">${ag.icon} ${ag.name}</td><td><strong>${s}</strong></td><td>${p.qty}</td><td>${fmt(p.avg)}</td>
+    const hold = ag.strat==='longterm' ? ` <span class="muted" style="font-size:11px">(held ${heldHours(p).toFixed(0)}h)</span>` : '';
+    rows.push(`<tr><td class="muted">${ag.icon} ${ag.name}</td><td><strong>${s}</strong>${hold}</td><td>${p.qty}</td><td>${fmt(p.avg)}</td>
       <td>${fmt(px)}</td><td>${fmt(mv)}</td>
       <td class="${pl>=0?'up':'down'}">${fmt(pl)}</td></tr>`);
   }});
