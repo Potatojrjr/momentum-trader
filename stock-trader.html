@@ -182,6 +182,7 @@
           <label class="switch"><input type="checkbox" id="autoToggle"><span class="slider"></span></label>
           <span id="autoState" class="muted" style="font-size:13px">Off</span>
         </div>
+        <button id="resetBtn" class="ghost" style="padding:8px 12px;font-size:13px">Reset progress</button>
         <button id="logoutBtn" class="ghost" style="padding:8px 12px;font-size:13px">Log out</button>
       </div>
     </div>
@@ -322,6 +323,36 @@ function hash(str){
 function readAccount(){ try{ return JSON.parse(localStorage.getItem(STORE_KEY)||'null'); }catch(e){ return null; } }
 function saveAccount(a){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(a)); }catch(e){} }
 
+/* ---------- Per-profile persistence: cash + the agents' LEARNED state ----------
+   Saves each agent's cash, open positions, tuned parameters and performance history
+   to this browser under the logged-in username, so logging back in resumes exactly
+   where you left off — same money, same learned strategy tuning. */
+function profileKey(user){ return 'mt_profile_'+user; }
+function loadProfile(user){ try{ return JSON.parse(localStorage.getItem(profileKey(user))||'null'); }catch(e){ return null; } }
+function saveProfile(){
+  if(!state.user || !state.agents || !state.agents.length) return;
+  try{
+    const snap={ v:1, savedAt:Date.now(),
+      startEquity:state.startEquity, target:state.target, reached:state.reached, startTime:state.startTime,
+      equityPeak:state.equityPeak, halted:state.halted, haltTime:state.haltTime,
+      feed:state.feed, replayLoops:state.replayLoops, auto:state.auto,
+      agents:state.agents.map(a=>({ id:a.id, name:a.name, strat:a.strat, icon:a.icon,
+        cash:a.cash, positions:a.positions, cooldown:a.cooldown, perf:a.perf,
+        trades:a.trades, wins:a.wins, realized:a.realized, params:a.params, status:a.status })) };
+    localStorage.setItem(profileKey(state.user), JSON.stringify(snap));
+  }catch(e){}
+}
+function restoreProfile(p){
+  state.startEquity=p.startEquity; state.target=p.target; state.reached=!!p.reached;
+  state.startTime=p.startTime||Date.now(); state.equityPeak=p.equityPeak||p.startEquity;
+  state.halted=!!p.halted; state.haltTime=p.haltTime||0;
+  state.feed=p.feed||'live'; state.replayLoops=p.replayLoops||0; state.auto=!!p.auto;
+  state.agents=p.agents.map(a=>({ ...a, positions:a.positions||{}, cooldown:a.cooldown||{}, perf:a.perf||[] }));
+  state.positions={}; state.prices={}; state.history={};
+  state.cash=state.agents.reduce((n,a)=>n+a.cash,0);
+  supervisorLast=Date.now();
+}
+
 let state = {
   user:'', cash:0, startEquity:0, target:0,
   positions:{}, prices:{}, history:{}, cooldown:{}, auto:false, reached:false,
@@ -347,7 +378,7 @@ function initAuth(){
     $('confirmWrap').classList.add('hidden');
     $('authBtn').textContent='Log in';
     $('authSwitch').innerHTML='Wrong account? You can <a href="#" id="resetAcct">reset and register a new one</a> (erases the saved account).';
-    $('resetAcct').onclick=(e)=>{e.preventDefault(); if(confirm('Erase the saved account and register again? This cannot be undone.')){ localStorage.removeItem(STORE_KEY); initAuth(); }};
+    $('resetAcct').onclick=(e)=>{e.preventDefault(); if(confirm('Erase the saved account and register again? This cannot be undone.')){ try{ localStorage.removeItem(profileKey(acct.user)); }catch(_){} localStorage.removeItem(STORE_KEY); initAuth(); }};
   }else{
     $('authTitle').textContent='Create your account';
     $('authSub').textContent='Register a username and password. The username can be registered only once on this device — after that, you’ll log in with it.';
@@ -382,7 +413,15 @@ $('declineBtn').onclick = () => {
     '<h1>You declined the terms</h1><p style="color:#8a99b8">Nothing was started. You can close this tab, '+
     'or reload to return.</p></div>';
 };
-$('agreeBtn').onclick = () => show('screen-setup');
+$('agreeBtn').onclick = () => {
+  const p=loadProfile(state.user);
+  if(p && p.agents && p.agents.length){    // returning user with saved progress -> resume
+    restoreProfile(p);
+    enterDash(true);
+  }else{
+    show('screen-setup');                  // brand-new account -> fund it
+  }
+};
 
 /* ---------- Screen 2: setup cash + target ---------- */
 $('setupBtn').onclick = () => {
@@ -393,9 +432,11 @@ $('setupBtn').onclick = () => {
   state.cash=cash; state.startEquity=cash; state.target=target;
   state.positions={}; state.reached=false; state.auto=false; state.startTime=Date.now();
   state.agents=buildAgents(cash); state.equityPeak=cash; state.halted=false; state.haltTime=0;  // build desk + reset safety
+  state.feed='live'; state.replayLoops=0;
   supervisorLast=Date.now();
   $('autoToggle').checked=false; $('autoState').textContent='Off';
-  enterDash();
+  saveProfile();                       // persist the freshly-funded account
+  enterDash(false);
 };
 
 function seedPrices(){
@@ -407,15 +448,30 @@ function seedPrices(){
 }
 
 /* ---------- Screen 3: dashboard + engine ---------- */
-function enterDash(){
+// startFeed: begin whichever data feed the profile was last using.
+function startFeed(){
+  if(state.feed==='replay') startReplay();
+  else if(state.feed==='mix') startMix();
+  else startLive();
+}
+function enterDash(restored){
   show('screen-dash');
   $('userTag').textContent='@'+state.user;
   $('targetStat').textContent=fmt(state.target);
   $('log').innerHTML='';
-  log('Account funded with '+fmt(state.cash)+'. Target: '+fmt(state.target)+'.','sys');
-  log('Trading desk online: 3 agents (Trend Rider · Dip Buyer · Breakout Hunter), each with '+fmt(state.cash/3)+'. Supervisor reallocates & re-tunes every 30s. Safety halt at 6% drawdown.','sys');
+  // reflect saved auto-trade + feed choice in the controls
+  $('autoToggle').checked=state.auto && !state.reached; $('autoState').textContent=$('autoToggle').checked?'On':'Off';
+  if($('feedMode')) $('feedMode').value=state.feed;
+  if(restored){
+    const totalTrades=state.agents.reduce((n,a)=>n+a.trades,0);
+    log('Welcome back, @'+state.user+'. Progress restored: portfolio '+fmt(portfolioValue())+', target '+fmt(state.target)+'.','win');
+    log('Desk memory loaded — '+totalTrades+' past trades and each agent’s learned tuning are back in place. It picks up learning from here.','sys');
+  }else{
+    log('Account funded with '+fmt(state.cash)+'. Target: '+fmt(state.target)+'.','sys');
+    log('Trading desk online: 3 agents (Trend Rider · Dip Buyer · Breakout Hunter), each with '+fmt(state.cash/3)+'. Supervisor reallocates & re-tunes every 30s. Safety halt at 6% drawdown.','sys');
+  }
   render();
-  startLive();
+  startFeed();
 }
 
 $('autoToggle').onchange = e => {
@@ -423,6 +479,7 @@ $('autoToggle').onchange = e => {
   state.auto=e.target.checked;
   $('autoState').textContent=state.auto?'On':'Off';
   log('Auto-Trade '+(state.auto?'ENABLED — trading toward your target.':'paused.'),'sys');
+  saveProfile();
 };
 // Data source selector: live Finnhub, replay June 9, or mix (random real June days).
 $('feedMode').onchange = e => {
@@ -430,14 +487,30 @@ $('feedMode').onchange = e => {
   if(m==='live') startLive();
   else if(m==='replay') startReplay();
   else if(m==='mix') startMix();
+  saveProfile();   // remember the chosen feed
 };
 $('logoutBtn').onclick = () => {
+  saveProfile();                                   // SAVE progress before leaving
   if(state.timer) clearInterval(state.timer);
   if(state.engineTimer) clearInterval(state.engineTimer);
   if(state.ws){ try{ state.ws.close(); }catch(e){} state.ws=null; }
   state.auto=false;
+  log('Progress saved. Logged out.','sys');
   initAuth(); show('screen-auth');
 };
+// Reset progress: wipe this profile's saved money + learned tuning, start over from setup.
+$('resetBtn').onclick = () => {
+  if(!confirm('Reset progress? This erases your saved cash, positions and the agents’ learned tuning for @'+state.user+', and starts a fresh account. This cannot be undone.')) return;
+  try{ localStorage.removeItem(profileKey(state.user)); }catch(e){}
+  if(state.timer) clearInterval(state.timer);
+  if(state.engineTimer) clearInterval(state.engineTimer);
+  if(state.ws){ try{ state.ws.close(); }catch(e){} state.ws=null; }
+  state.auto=false; state.agents=[];
+  $('startCash').value='10000'; $('targetAmt').value='12000';
+  show('screen-setup');
+};
+// Also save if the tab is closed/refreshed, so nothing is lost.
+window.addEventListener('beforeunload', saveProfile);
 
 /* ---------- Technical indicators (documented, public methods) ---------- */
 function sma(arr,n){ if(arr.length<n) return null; const s=arr.slice(-n); return s.reduce((a,b)=>a+b,0)/n; }
@@ -683,7 +756,9 @@ function engineStep(){
   }
   checkTarget();
   render();
+  if((++saveTick % 15)===0) saveProfile();     // auto-save progress + learned tuning every ~15s
 }
+let saveTick=0;
 
 function checkTarget(){
   if(!state.reached && portfolioValue()>=state.target){
