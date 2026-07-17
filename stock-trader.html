@@ -165,6 +165,8 @@
     <div class="topbar">
       <div style="display:flex;align-items:center;gap:12px">
         <h2 style="margin:0">Dashboard</h2>
+        <span id="tabIntraday" onclick="switchDesk('intraday')" style="padding:6px 12px;border:1px solid #2a3350;border-radius:8px;font-size:13px;cursor:pointer">Intraday Desk</span>
+        <span id="tabLong" onclick="switchDesk('long')" style="padding:6px 12px;border:1px solid #2a3350;border-radius:8px;font-size:13px;cursor:pointer">Long-Term Desk</span>
         <span id="modePill" class="pill sim">Connecting…</span>
         <span class="muted" style="font-size:13px" id="userTag"></span>
       </div>
@@ -332,11 +334,12 @@ function loadProfile(user){ try{ return JSON.parse(localStorage.getItem(profileK
 function saveProfile(){
   if(!state.user || !state.agents || !state.agents.length) return;
   try{
-    const snap={ v:1, savedAt:Date.now(),
+    const snap={ v:2, savedAt:Date.now(),
       startEquity:state.startEquity, target:state.target, reached:state.reached, startTime:state.startTime,
       equityPeak:state.equityPeak, halted:state.halted, haltTime:state.haltTime, simClock:state.simClock,
-      feed:state.feed, replayLoops:state.replayLoops, auto:state.auto,
-      agents:state.agents.map(a=>({ id:a.id, name:a.name, strat:a.strat, icon:a.icon,
+      feed:state.feed, replayLoops:state.replayLoops,
+      deskAuto:state.deskAuto, deskStart:state.deskStart, view:state.view,
+      agents:state.agents.map(a=>({ id:a.id, desk:a.desk, name:a.name, strat:a.strat, icon:a.icon,
         cash:a.cash, positions:a.positions, cooldown:a.cooldown, perf:a.perf,
         trades:a.trades, wins:a.wins, realized:a.realized, grossWin:a.grossWin||0, grossLoss:a.grossLoss||0,
         params:a.params, status:a.status })) };
@@ -347,15 +350,20 @@ function restoreProfile(p){
   state.startEquity=p.startEquity; state.target=p.target; state.reached=!!p.reached;
   state.startTime=p.startTime||Date.now(); state.equityPeak=p.equityPeak||p.startEquity;
   state.halted=!!p.halted; state.haltTime=p.haltTime||0;
-  state.feed=p.feed||'live'; state.replayLoops=p.replayLoops||0; state.auto=!!p.auto;
+  state.feed=p.feed||'live'; state.replayLoops=p.replayLoops||0;
   state.simClock=p.simClock||Date.now();
-  state.agents=p.agents.map(a=>({ ...a, positions:a.positions||{}, cooldown:a.cooldown||{}, perf:a.perf||[], grossWin:a.grossWin||0, grossLoss:a.grossLoss||0 }));
-  // migrate older 3-agent profiles: add the Long-Term Holder, funded by a small even skim
-  if(!state.agents.some(a=>a.id==='lt')){
-    const total=state.agents.reduce((n,a)=>n+a.cash,0);
-    const share=total/(state.agents.length+1), factor=(total-share)/total;
-    state.agents.forEach(a=>a.cash*=factor);
-    state.agents.push(makeLTAgent(share));
+  state.deskAuto=p.deskAuto||{intraday:false,long:false};
+  state.view=p.view||'intraday';
+  const twoDesk = p.agents && p.agents.every(a=>a.desk);
+  if(twoDesk){
+    state.agents=p.agents.map(a=>({ ...a, positions:a.positions||{}, cooldown:a.cooldown||{}, perf:a.perf||[], grossWin:a.grossWin||0, grossLoss:a.grossLoss||0 }));
+    state.deskStart=p.deskStart||{intraday:p.startEquity/2, long:p.startEquity-p.startEquity/2};
+  }else{
+    // migrate an older single-desk profile: preserve total money, rebuild the two-desk layout fresh
+    const total=(p.agents||[]).reduce((n,a)=>n+(a.cash||0),0) || p.startEquity;
+    state.agents=buildAgents(total);
+    state.deskStart={intraday:total/2, long:total-total/2};
+    state.deskAuto={intraday:false,long:false};
   }
   state.positions={}; state.prices={}; state.history={};
   state.cash=state.agents.reduce((n,a)=>n+a.cash,0);
@@ -364,10 +372,13 @@ function restoreProfile(p){
 
 let state = {
   user:'', cash:0, startEquity:0, target:0,
-  positions:{}, prices:{}, history:{}, cooldown:{}, auto:false, reached:false,
+  positions:{}, prices:{}, history:{}, cooldown:{}, reached:false,
   timer:null, engineTimer:null, ws:null, startTime:0,
-  // --- multi-agent desk + safety state ---
-  agents:[],                  // the three strategy agents (built at setup)
+  // --- two desks (intraday + long-term) on one agent list ---
+  agents:[],                  // all agents from both desks (tagged by .desk)
+  deskAuto:{intraday:false, long:false},  // independent Auto-Trade per desk
+  deskStart:{intraday:0, long:0},         // each desk's starting equity (for its P/L)
+  view:'intraday',            // which desk's page is currently shown
   equityPeak:0,               // high-water mark of desk portfolio value
   halted:false,               // circuit breaker: true = all agents paused
   haltTime:0,                 // when the last safety halt tripped (for cool-off)
@@ -440,8 +451,9 @@ $('setupBtn').onclick = () => {
   if(!(cash>0)){ $('setupErr').textContent='Enter a starting cash amount above 0.'; return; }
   if(!(target>cash)){ $('setupErr').textContent='Your target must be higher than your starting cash.'; return; }
   state.cash=cash; state.startEquity=cash; state.target=target;
-  state.positions={}; state.reached=false; state.auto=false; state.startTime=Date.now();
-  state.agents=buildAgents(cash); state.equityPeak=cash; state.halted=false; state.haltTime=0;  // build desk + reset safety
+  state.positions={}; state.reached=false; state.startTime=Date.now();
+  state.agents=buildAgents(cash); state.equityPeak=cash; state.halted=false; state.haltTime=0;  // build both desks + reset safety
+  state.deskAuto={intraday:false, long:false}; state.deskStart={intraday:cash/2, long:cash-cash/2}; state.view='intraday';
   state.feed='live'; state.replayLoops=0; state.simClock=Date.now();
   supervisorLast=Date.now();
   $('autoToggle').checked=false; $('autoState').textContent='Off';
@@ -469,26 +481,40 @@ function enterDash(restored){
   $('userTag').textContent='@'+state.user;
   $('targetStat').textContent=fmt(state.target);
   $('log').innerHTML='';
-  // reflect saved auto-trade + feed choice in the controls
-  $('autoToggle').checked=state.auto && !state.reached; $('autoState').textContent=$('autoToggle').checked?'On':'Off';
   if($('feedMode')) $('feedMode').value=state.feed;
+  syncDeskControls();                            // reflect active desk's auto-trade + tab highlight
   if(restored){
     const totalTrades=state.agents.reduce((n,a)=>n+a.trades,0);
     log('Welcome back, @'+state.user+'. Progress restored: portfolio '+fmt(portfolioValue())+', target '+fmt(state.target)+'.','win');
-    log('Desk memory loaded — '+totalTrades+' past trades and each agent’s learned tuning are back in place. It picks up learning from here.','sys');
+    log('Desk memory loaded — '+totalTrades+' past trades and both desks’ learned tuning are back in place.','sys');
   }else{
     log('Account funded with '+fmt(state.cash)+'. Target: '+fmt(state.target)+'.','sys');
-    log('Trading desk online: 4 agents (Trend Rider · Dip Buyer · Breakout Hunter · Long-Term Holder), each with '+fmt(state.cash/4)+'. The Long-Term Holder buys and holds 24h+; the others trade intraday. Supervisor reallocates & re-tunes every 30s. Safety halt at 6% drawdown.','sys');
+    log('Two desks online, each with '+fmt(state.cash/2)+': INTRADAY (Trend · Dip · Breakout, flat each session) and LONG-TERM (same strategies but HOLD 24h+). Switch tabs and turn each desk’s Auto-Trade on separately.','sys');
   }
   render();
   startFeed();
 }
+// Switch which desk's page is shown; the shared dashboard rebinds to that desk.
+function switchDesk(d){
+  state.view=d;
+  syncDeskControls();
+  render();
+}
+function syncDeskControls(){
+  const on = state.deskAuto[state.view] && !state.reached;
+  $('autoToggle').checked=on; $('autoState').textContent=on?'On':'Off';
+  const t1=$('tabIntraday'), t2=$('tabLong');
+  if(t1&&t2){ const act='background:#2b3566;color:#fff', idle='background:#141a2e;color:#9fb0d0';
+    t1.setAttribute('style', 'padding:6px 12px;border:1px solid #2a3350;border-radius:8px;font-size:13px;cursor:pointer;'+(state.view==='intraday'?act:idle));
+    t2.setAttribute('style', 'padding:6px 12px;border:1px solid #2a3350;border-radius:8px;font-size:13px;cursor:pointer;'+(state.view==='long'?act:idle));
+  }
+}
 
 $('autoToggle').onchange = e => {
   if(state.reached && e.target.checked){ e.target.checked=false; return; }
-  state.auto=e.target.checked;
-  $('autoState').textContent=state.auto?'On':'Off';
-  log('Auto-Trade '+(state.auto?'ENABLED — trading toward your target.':'paused.'),'sys');
+  state.deskAuto[state.view]=e.target.checked;                 // controls the desk you're viewing
+  $('autoState').textContent=e.target.checked?'On':'Off';
+  log(DESK_NAME[state.view]+': Auto-Trade '+(e.target.checked?'ENABLED — this desk is now trading.':'paused.'),'sys');
   saveProfile();
 };
 // Data source selector: live Finnhub, replay June 9, or mix (random real June days).
@@ -504,7 +530,7 @@ $('logoutBtn').onclick = () => {
   if(state.timer) clearInterval(state.timer);
   if(state.engineTimer) clearInterval(state.engineTimer);
   if(state.ws){ try{ state.ws.close(); }catch(e){} state.ws=null; }
-  state.auto=false;
+  state.deskAuto={intraday:false, long:false};
   log('Progress saved. Logged out.','sys');
   initAuth(); show('screen-auth');
 };
@@ -515,7 +541,7 @@ $('resetBtn').onclick = () => {
   if(state.timer) clearInterval(state.timer);
   if(state.engineTimer) clearInterval(state.engineTimer);
   if(state.ws){ try{ state.ws.close(); }catch(e){} state.ws=null; }
-  state.auto=false; state.agents=[];
+  state.deskAuto={intraday:false, long:false}; state.agents=[];
   $('startCash').value='10000'; $('targetAmt').value='12000';
   show('screen-setup');
 };
@@ -719,7 +745,7 @@ function feedReplay(){
   if(i === REPLAY_LEN-1){
     // End of the session: close INTRADAY books at the June-9 close (long-term holds carry over),
     // so the next pass starts flat and re-trades — otherwise intraday positions get stuck on a loop.
-    state.agents.forEach(ag=>{ if(ag.strat==='longterm') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
+    state.agents.forEach(ag=>{ if(ag.desk==='long') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
     state.replayLoops++;
     log(`↻ June 9 replay — pass ${state.replayLoops} complete. Intraday books flat; long-term holds carry across.`,'sys');
   }
@@ -747,7 +773,7 @@ function feedMix(){
     // End of this random day — CLOSE INTRADAY books at the day's real close (long-term holds carry
     // over across days). Flattening intraday avoids taking the artificial gap between two unrelated
     // days as profit/loss; the long-term agent's gap is neutralized by adjustLTForGap instead.
-    state.agents.forEach(ag=>{ if(ag.strat==='longterm') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
+    state.agents.forEach(ag=>{ if(ag.desk==='long') return; for(const s of Object.keys(ag.positions)) closeTradeA(ag,s,state.prices[s],'session close'); });
     state.replayIdx=0; state.replayLoops++;
     const prev2=state.mixDay, next=pickMixDay();
     log(`↻ Mix pass ${state.replayLoops}: finished ${prev2} → now a random June day (${next}). Intraday books flat; long-term holds carry across.`,'sys');
@@ -764,11 +790,12 @@ function engineStep(){
     (state.history[s]=state.history[s]||[]).push(px);
     if(state.history[s].length>240) state.history[s].shift();
   });
-  state.agents.forEach(manageAgent);           // each agent: stop-loss / take-profit first
-  updateRisk();                                // SAFETY: desk-wide drawdown / circuit breaker
-  if(state.auto && !state.reached && !state.halted){
-    state.agents.forEach(runAgent);            // each agent trades its own book
-    runSupervisor();                           // supervisor reviews & re-tunes the desk
+  state.agents.forEach(manageAgent);           // every agent manages its exits, both desks
+  updateRisk();                                // SAFETY: portfolio-wide drawdown / circuit breaker
+  if(!state.reached && !state.halted){
+    // run only the agents whose desk has Auto-Trade ON (each desk is independent)
+    state.agents.forEach(ag=>{ if(state.deskAuto[ag.desk]) runAgent(ag); });
+    runSupervisor();                           // supervisor reviews & re-tunes each desk
   }
   checkTarget();
   render();
@@ -778,9 +805,9 @@ let saveTick=0;
 
 function checkTarget(){
   if(!state.reached && portfolioValue()>=state.target){
-    state.reached=true; state.auto=false;
+    state.reached=true; state.deskAuto.intraday=false; state.deskAuto.long=false;
     $('autoToggle').checked=false; $('autoState').textContent='Off';
-    log('🎯 TARGET REACHED — portfolio hit '+fmt(portfolioValue())+'. Auto-Trade stopped.','win');
+    log('🎯 TARGET REACHED — total portfolio hit '+fmt(portfolioValue())+'. Both desks stopped.','win');
   }
 }
 
@@ -808,7 +835,7 @@ function heldHours(p){ return p.entryTime!=null ? (marketNow()-p.entryTime)/3600
 // position's cost & stops by the price gap, so the artificial overnight gap between
 // sessions is NOT counted as profit/loss — the swing trade tracks real intraday moves only.
 function adjustLTForGap(prev){
-  state.agents.forEach(ag=>{ if(ag.strat!=='longterm') return;
+  state.agents.forEach(ag=>{ if(ag.desk!=='long') return;
     for(const s of Object.keys(ag.positions)){
       const p=ag.positions[s], now=state.prices[s], was=prev[s];
       if(typeof now==='number' && typeof was==='number'){ const g=now-was; p.avg+=g; p.stop+=g; p.target+=g; p.peak+=g; }
@@ -833,28 +860,33 @@ const SUPERVISOR_MS=30000;   // supervisor reviews the desk every 30s
 const AGENT_WINDOW=10;       // judge each agent on its last 10 closed trades
 let supervisorLast=0;
 
-// A single Long-Term (swing) agent — buys and HOLDS for 24h+ before exiting.
-function makeLTAgent(cash){
-  return { id:'lt', name:'Long-Term Holder', strat:'longterm', icon:'🕰️',
-    cash:cash, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
-    params:{ gate:4, risk:0.02 }, status:'active' };
+/* TWO DESKS on one agent list, tagged by `desk`:
+   - 'intraday' : the original day-trading agents (flatten each session)
+   - 'long'     : the same 3 strategies but HOLD 24h+ (carry across sessions)
+   Each desk gets HALF the starting cash and has its own Auto-Trade switch. */
+function makeAgent(desk,idbase,name,strat,icon,gate,risk,cash){
+  return { id:idbase+'_'+desk, desk, name, strat, icon,
+    cash, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
+    params:{ gate, risk }, status:'active' };
 }
-// Build the four-agent desk, splitting the starting cash evenly.
-function buildAgents(totalCash){
-  const each=totalCash/4;
+function buildDeskAgents(cash,desk){
+  const each=cash/3, risk = desk==='long'?0.02:0.015;
   return [
-    { id:'trend', name:'Trend Rider',   strat:'trend',    icon:'▲',
-      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
-      params:{ gate:5,  risk:0.015 }, status:'active' },
-    { id:'mr',    name:'Dip Buyer',      strat:'mr',       icon:'⤴',
-      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
-      params:{ gate:35, risk:0.015 }, status:'active' },
-    { id:'brk',   name:'Breakout Hunter',strat:'breakout', icon:'🚀',
-      cash:each, positions:{}, cooldown:{}, perf:[], trades:0, wins:0, realized:0, grossWin:0, grossLoss:0,
-      params:{ gate:2,  risk:0.015 }, status:'active' },
-    makeLTAgent(totalCash-3*each),
+    makeAgent(desk,'trend','Trend Rider',   'trend',    '▲', desk==='long'?4:5, risk, each),
+    makeAgent(desk,'mr',   'Dip Buyer',     'mr',       '⤴', 35,                 risk, each),
+    makeAgent(desk,'brk',  'Breakout Hunter','breakout','🚀', 2,                 risk, cash-2*each),
   ];
 }
+// Build both desks (6 agents), splitting the starting cash 50/50.
+function buildAgents(totalCash){
+  const half=totalCash/2;
+  return [ ...buildDeskAgents(half,'intraday'), ...buildDeskAgents(totalCash-half,'long') ];
+}
+const DESKS=['intraday','long'];
+const DESK_NAME={intraday:'Intraday Desk', long:'Long-Term Desk'};
+function deskAgents(d){ return state.agents.filter(a=>a.desk===d); }
+function deskEquity(d){ return deskAgents(d).reduce((v,a)=>v+agentEquity(a),0); }
+function deskCash(d){ return deskAgents(d).reduce((v,a)=>v+a.cash,0); }
 
 // Value of one agent's book (its cash + market value of its own positions).
 function agentEquity(ag){ let v=ag.cash; for(const s in ag.positions) v+=ag.positions[s].qty*state.prices[s]; return v; }
@@ -869,7 +901,7 @@ function openTradeA(ag,sym,qty,px,atr,opts){
   const target = opts.target!=null ? opts.target : px+TARGET_ATR*atr;
   ag.positions[sym]={qty, avg:px, atr:atr, peak:px, stop, target, type:ag.strat, entryTime:marketNow()};
   ag.cash-=cost;
-  const extra = ag.strat==='longterm' ? ' — long-term hold (24h+ min)' : '';
+  const extra = ag.desk==='long' ? ' — long-term hold (24h+ min)' : '';
   log(`${ag.name}: BUY ${qty} ${sym} @ ${fmt(px)} (stop ${fmt(stop)} · tgt ${fmt(target)})${extra}`,'buy');
 }
 function closeTradeA(ag,sym,px,reason){
@@ -889,7 +921,7 @@ function manageAgent(ag){
     if(typeof px!=='number') continue;
     if(px>p.peak) p.peak=px;
     // ---- LONG-TERM: hold 24h+ (except a protective stop), then take profit / trail / max-hold exit ----
-    if(ag.strat==='longterm'){
+    if(ag.desk==='long'){
       const h=heldHours(p);
       if(px<=p.stop){ closeTradeA(ag,s,px, p.stop>p.avg?`trailing-stop (held ${h.toFixed(0)}h)`:`stop-loss (held ${h.toFixed(0)}h)`); continue; }
       if(h>=LT_MIN_HOLD_H){                       // only after the 24h minimum hold
@@ -917,24 +949,24 @@ function runAgent(ag){
     if(!a.warmed || !(a.atr>0)) return;
     const held=ag.positions[s];
     const cooling=ag.cooldown[s] && (now-ag.cooldown[s]<COOLDOWN_MS);
+    const long = ag.desk==='long';
     if(!held && !cooling){
       let entry=false, opts={};
       if(ag.strat==='trend'    && a.strongTrend && a.score>=ag.params.gate){ entry=true; }
       else if(ag.strat==='mr'  && a.mrBuy && a.rsi<=ag.params.gate && a.mid>px){ entry=true; opts={stop:px-MR_STOP_ATR*a.atr, target:a.mid}; }
       else if(ag.strat==='breakout' && a.breakout && a.score>=ag.params.gate){ entry=true; }
-      // LONG-TERM: buy a confirmed uptrend to HOLD; wide stop + big target, min 24h hold.
-      else if(ag.strat==='longterm' && a.strongTrend && a.score>=ag.params.gate){ entry=true; opts={stop:px-LT_STOP_ATR*a.atr, target:px+LT_TARGET_ATR*a.atr}; }
+      // Long-Term desk: same entry SIGNAL, but override to a wide stop + big target for a 24h+ hold.
+      if(entry && long){ opts={stop:px-LT_STOP_ATR*a.atr, target:px+LT_TARGET_ATR*a.atr}; }
       if(entry){
-        const stopDist=(ag.strat==='mr'?MR_STOP_ATR : ag.strat==='longterm'?LT_STOP_ATR : STOP_ATR)*a.atr;
+        const stopDist=(long ? LT_STOP_ATR : (ag.strat==='mr'?MR_STOP_ATR:STOP_ATR))*a.atr;
         let qty=Math.floor((eq*ag.params.risk)/stopDist);
         qty=Math.min(qty, Math.floor((ag.cash*0.95)/px));
         if(qty>0) openTradeA(ag,s,qty,px,a.atr,opts);
       }
-    } else if(held){
+    } else if(held && !long){    // long-desk exits are time-gated in manageAgent, not here
       if(ag.strat==='trend'    && (!a.strongTrend || a.score<=1)) closeTradeA(ag,s,px,'signal exit');
       else if(ag.strat==='mr'  && a.rsi!=null && a.rsi>=55)       closeTradeA(ag,s,px,'mean reverted');
       else if(ag.strat==='breakout' && a.score<=0)               closeTradeA(ag,s,px,'breakout faded');
-      // long-term exits are time-gated and handled in manageAgent (not here)
     }
   });
 }
@@ -944,21 +976,23 @@ function runSupervisor(){
   const now=Date.now();
   if(now-supervisorLast < SUPERVISOR_MS) return;
   supervisorLast=now;
-  // 1) score each agent (need a few trades before judging)
-  const scored=state.agents.map(ag=>{ const st=agentStats(ag); return {ag, st}; });
+  DESKS.forEach(d=>superviseDesk(deskAgents(d)));   // supervise each desk on its OWN money
+}
+function superviseDesk(agents){
+  const scored=agents.map(ag=>{ const st=agentStats(ag); return {ag, st}; });
   const anyRated=scored.some(o=>o.st.n>=3);
-  // 2) REALLOCATE idle cash by performance weight (only moves free cash, never force-sells)
-  const totalIdle=state.agents.reduce((x,ag)=>x+ag.cash,0);
+  // REALLOCATE idle cash by performance weight — ONLY within this desk (money never leaves the desk)
+  const totalIdle=agents.reduce((x,ag)=>x+ag.cash,0);
   if(totalIdle>0 && anyRated){
     const weights=scored.map(({ag,st})=>{
-      let w=1;                                   // base weight
+      let w=1;
       if(st.n>=3){ w += st.net>0?0.8:-0.5; if(st.wr!=null){ w += (st.wr-0.5); } }
-      return Math.max(0.2,w);                    // floor so nobody is fully starved
+      return Math.max(0.2,w);
     });
     const wSum=weights.reduce((a,b)=>a+b,0);
-    state.agents.forEach((ag,i)=>{ ag.cash = totalIdle*(weights[i]/wSum); });
+    agents.forEach((ag,i)=>{ ag.cash = totalIdle*(weights[i]/wSum); });
   }
-  // 3) TUNE each agent: tighten losers (harder entries, smaller size), reward winners
+  // TUNE each agent: tighten losers, reward winners
   scored.forEach(({ag,st})=>{
     if(st.n<4) return;
     const losing = st.net<0 && st.wr!=null && st.wr<0.40;
@@ -998,25 +1032,27 @@ function updateRisk(){
 }
 
 function render(){
-  const pv=portfolioValue();
-  $('pv').textContent=fmt(pv);
-  const totalCash=state.agents.reduce((x,ag)=>x+ag.cash,0);
-  $('cash').textContent=fmt(totalCash);
+  const pv=portfolioValue();                 // TOTAL across both desks (drives the goal bar)
+  const d=state.view;                        // the desk currently being viewed
+  const deskPV=deskEquity(d), deskC=deskCash(d), deskStartV=state.deskStart[d]||0;
+  $('pv').textContent=fmt(deskPV);           // stat cards show the ACTIVE desk
+  $('cash').textContent=fmt(deskC);
   // In Mix mode, show which real June day is currently playing (full day, in order).
   if(state.feed==='mix' && state.mixDay){ $('modePill').className='pill sim'; $('modePill').textContent='Mix · playing '+state.mixDay+' (real, in order)'; }
-  const dpl=pv-state.startEquity;
-  $('dpl').innerHTML=`<span class="${dpl>=0?'up':'down'}">${fmt(dpl)} (${pct(state.startEquity?dpl/state.startEquity*100:0)})</span>`;
+  const dpl=deskPV-deskStartV;
+  $('dpl').innerHTML=`<span class="${dpl>=0?'up':'down'}">${fmt(dpl)} (${pct(deskStartV?dpl/deskStartV*100:0)})</span>`;
 
   const span=state.target-state.startEquity;
   const prog=span>0 ? Math.max(0,Math.min(100,((pv-state.startEquity)/span)*100)) : 0;
   $('goalBar').style.width=prog.toFixed(1)+'%';
   $('goalText').innerHTML = state.reached
     ? `<span class="up">Target reached ✓</span>`
-    : `${fmt(pv)} of ${fmt(state.target)} &middot; ${prog.toFixed(0)}%`;
+    : `${fmt(pv)} total of ${fmt(state.target)} &middot; ${prog.toFixed(0)}%`;
 
-  // honest earnings-pace tracker vs the $1.00 / 5s goal
+  // honest earnings-pace tracker vs the $1.00 / 5s goal (whole portfolio)
+  const totalDpl=pv-state.startEquity;
   const elapsed=Math.max(1,(Date.now()-state.startTime)/1000);
-  const per5=(dpl/elapsed)*5;
+  const per5=(totalDpl/elapsed)*5;
   $('goalPace').innerHTML = `<span class="${per5>=1?'up':(per5>=0?'muted':'down')}">${fmt(per5)} / 5s</span>`
     + ` <span class="muted">(${per5>=1?'on/above pace':'below pace'})</span>`;
 
@@ -1039,17 +1075,18 @@ function render(){
       <td class="${cls}">${sig}</td></tr>`;
   }).join('');
 
-  // ---- Agents panel: each agent's book, performance, current tuning, status ----
+  // ---- Agents panel: the ACTIVE desk's agents ----
+  const av=deskAgents(d);
   // which agent is doing worst (for the "needs improvement" flag)
-  const worstNet = state.agents.length ? Math.min(...state.agents.map(a=>a.realized)) : 0;
-  if($('agentBody')) $('agentBody').innerHTML = state.agents.map(ag=>{
+  const worstNet = av.length ? Math.min(...av.map(a=>a.realized)) : 0;
+  if($('agentBody')) $('agentBody').innerHTML = av.map(ag=>{
     const eq=agentEquity(ag), st=agentStats(ag);
     const nPos=Object.keys(ag.positions).length;
     const wr = st.wr!=null ? (st.wr*100).toFixed(0)+'%' : '—';
     const made=ag.grossWin||0, lost=ag.grossLoss||0;
     const gateTxt = ag.strat==='mr' ? ('RSI≤'+ag.params.gate) : ('score≥'+ag.params.gate);
     // flag the weakest agent (lowest net, actually losing, with a few trades) as needing improvement
-    const needsWork = state.agents.length>1 && ag.realized===worstNet && ag.realized<0 && ag.trades>=3;
+    const needsWork = av.length>1 && ag.realized===worstNet && ag.realized<0 && ag.trades>=3;
     const stChip = state.halted ? '<span class="down">paused</span>'
       : needsWork ? '<span class="down">⚠ needs work</span>' : '<span class="up">active</span>';
     return `<tr><td><strong>${ag.icon} ${ag.name}</strong><br><span class="muted" style="font-size:11px">${ag.strat} · ${nPos} open</span></td>
@@ -1062,11 +1099,11 @@ function render(){
       <td>${stChip}</td></tr>`;
   }).join('');
 
-  // ---- Positions across all agents ----
+  // ---- Positions for the ACTIVE desk ----
   const rows=[];
-  state.agents.forEach(ag=>{ for(const s of Object.keys(ag.positions)){
+  av.forEach(ag=>{ for(const s of Object.keys(ag.positions)){
     const p=ag.positions[s], px=state.prices[s], mv=p.qty*px, pl=(px-p.avg)*p.qty;
-    const hold = ag.strat==='longterm' ? ` <span class="muted" style="font-size:11px">(held ${heldHours(p).toFixed(0)}h)</span>` : '';
+    const hold = ag.desk==='long' ? ` <span class="muted" style="font-size:11px">(held ${heldHours(p).toFixed(0)}h)</span>` : '';
     rows.push(`<tr><td class="muted">${ag.icon} ${ag.name}</td><td><strong>${s}</strong>${hold}</td><td>${p.qty}</td><td>${fmt(p.avg)}</td>
       <td>${fmt(px)}</td><td>${fmt(mv)}</td>
       <td class="${pl>=0?'up':'down'}">${fmt(pl)}</td></tr>`);
